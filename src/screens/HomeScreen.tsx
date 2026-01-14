@@ -11,7 +11,7 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import {NativeStackScreenProps} from '@react-navigation/native-stack';
-import MapLibreGL from '@rnmapbox/maps';
+import MapLibreGL from '@maplibre/maplibre-react-native';
 import {RootStackParamList, Location, SearchResult, Trip} from '../types';
 import LocationSearchService from '../services/LocationSearchService';
 import RoutingService from '../services/RoutingService';
@@ -29,8 +29,8 @@ const HomeScreen: React.FC<Props> = ({navigation}) => {
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [searchMode, setSearchMode] = useState<'pickup' | 'dropoff' | null>(null);
   const [calculating, setCalculating] = useState(false);
-  const mapRef = useRef<MapLibreGL.MapView>(null);
-  const cameraRef = useRef<MapLibreGL.Camera>(null);
+  const mapRef = useRef<any>(null);
+  const cameraRef = useRef<any>(null);
 
   useEffect(() => {
     initializeServices();
@@ -150,7 +150,6 @@ const HomeScreen: React.FC<Props> = ({navigation}) => {
       <MapLibreGL.MapView
         ref={mapRef}
         style={styles.map}
-        styleURL={`file://${STYLE_PATH}`}
         onPress={handleMapPress}>
         <MapLibreGL.Camera
           ref={cameraRef}

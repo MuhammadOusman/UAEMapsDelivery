@@ -8,7 +8,7 @@ import {
   Platform,
 } from 'react-native';
 import {NativeStackScreenProps} from '@react-navigation/native-stack';
-import MapLibreGL from '@rnmapbox/maps';
+import MapLibreGL from '@maplibre/maplibre-react-native';
 import Geolocation from '@react-native-community/geolocation';
 import {RootStackParamList, Trip, Location} from '../types';
 import RoutingService from '../services/RoutingService';
@@ -23,8 +23,8 @@ const NavigationScreen: React.FC<Props> = ({route, navigation}) => {
   const [currentInstructionIndex, setCurrentInstructionIndex] = useState(0);
   const [distanceToNext, setDistanceToNext] = useState(0);
   const [isRerouting, setIsRerouting] = useState(false);
-  const mapRef = useRef<MapLibreGL.MapView>(null);
-  const cameraRef = useRef<MapLibreGL.Camera>(null);
+  const mapRef = useRef<any>(null);
+  const cameraRef = useRef<any>(null);
   const watchIdRef = useRef<number | null>(null);
 
   useEffect(() => {

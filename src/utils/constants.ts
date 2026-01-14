@@ -1,7 +1,7 @@
 import RNFS from 'react-native-fs';
 
 // GitHub Release URLs - YOU NEED TO UPDATE THESE
-export const GITHUB_REPO = 'YOUR_USERNAME/YOUR_REPO';
+export const GITHUB_REPO = 'MuhammadOusman/UAEMapsDelivery';
 export const GITHUB_RELEASE_TAG = 'v1.0.0';
 
 export const DOWNLOAD_URLS = {
