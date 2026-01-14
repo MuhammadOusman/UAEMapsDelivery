@@ -35,7 +35,11 @@
 		<true/>
 	</dict>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string></string>
+	<string>This app needs your location to provide turn-by-turn navigation and track your delivery route.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>This app needs your location to provide turn-by-turn navigation and track your delivery route.</string>
+	<key>NSLocationAlwaysUsageDescription</key>
+	<string>This app needs your location to provide turn-by-turn navigation and track your delivery route.</string>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIRequiredDeviceCapabilities</key>
