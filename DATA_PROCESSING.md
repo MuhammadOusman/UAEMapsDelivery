@@ -49,48 +49,51 @@ docker run -v $(pwd):/data ghcr.io/systemed/tilemaker:latest \
 # Result: uae.mbtiles (~400-700MB)
 ```
 
-#### Option B: Manual Installation
+### Step 3: Build OSRM Routing Graph
 
-```bash
-# Install Tilemaker (Ubuntu/Debian)
-sudo apt-get install tilemaker
-
-# Generate MBTiles
-tilemaker --input united-arab-emirates-latest.osm.pbf \
-          --output uae.mbtiles \
-          --process resources/process-openmaptiles.lua \
-          --config resources/config-openmaptiles.json
-```
-
-### Step 3: Build Valhalla Routing Tiles
+OSRM (Open Source Routing Machine) provides high-quality routing with turn-by-turn navigation.
 
 #### Using Docker (Recommended)
 
 ```bash
-# Pull Valhalla Docker image
-docker pull ghcr.io/valhalla/valhalla:latest
+# Pull OSRM Docker image
+docker pull ghcr.io/project-osrm/osrm-backend:latest
 
-# Create working directory
-mkdir -p valhalla_tiles
+# Create OSRM directory
+mkdir -p osrm
 
-# Build Valhalla config
-docker run -v $(pwd):/data ghcr.io/valhalla/valhalla:latest \
-  valhalla_build_config \
-  --mjolnir-tile-dir /data/valhalla_tiles \
-  --mjolnir-tile-extract /data/valhalla_tiles.tar \
-  --mjolnir-timezone /data/valhalla_tiles/timezones.sqlite \
-  --mjolnir-admin /data/valhalla_tiles/admins.sqlite > valhalla.json
+# Extract road network (this takes 10-20 minutes)
+docker run -t -v $(pwd):/data ghcr.io/project-osrm/osrm-backend:latest \
+  osrm-extract -p /opt/car.lua /data/united-arab-emirates-latest.osm.pbf \
+  -d /data/osrm
 
-# Build routing tiles
-docker run -v $(pwd):/data ghcr.io/valhalla/valhalla:latest \
-  valhalla_build_tiles \
-  -c /data/valhalla.json \
-  /data/united-arab-emirates-latest.osm.pbf
+# Partition the network
+docker run -t -v $(pwd):/data ghcr.io/project-osrm/osrm-backend:latest \
+  osrm-partition /data/osrm/united-arab-emirates-latest.osrm
 
-# Compress tiles
-tar -czf valhalla_tiles.tar.gz valhalla_tiles/
+# Customize for car profile
+docker run -t -v $(pwd):/data ghcr.io/project-osrm/osrm-backend:latest \
+  osrm-customize /data/osrm/united-arab-emirates-latest.osrm
 
-# Result: valhalla_tiles.tar.gz (~50-100MB)
+# Result: Multiple OSRM files in osrm/ directory
+# - uae.osrm (main graph)
+# - uae.osrm.edges (road edges)
+# - uae.osrm.geometry (route geometries)
+# - uae.osrm.nodes (road nodes)
+# - uae.osrm.names (street names)
+# Total size: ~50-150MB
+```
+
+#### Manual Installation (Linux/Mac)
+
+```bash
+# Install OSRM backend
+sudo apt-get install osrm-backend
+
+# Extract, partition, and customize
+osrm-extract -p profiles/car.lua united-arab-emirates-latest.osm.pbf -d osrm/
+osrm-partition osrm/united-arab-emirates-latest.osrm
+osrm-customize osrm/united-arab-emirates-latest.osrm
 ```
 
 ### Step 4: Extract Address Database

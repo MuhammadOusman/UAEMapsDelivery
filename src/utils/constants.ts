@@ -6,15 +6,21 @@ export const GITHUB_RELEASE_TAG = 'v1.0.0';
 
 export const DOWNLOAD_URLS = {
   MBTILES: `https://github.com/${GITHUB_REPO}/releases/download/${GITHUB_RELEASE_TAG}/uae.mbtiles`,
-  VALHALLA: `https://github.com/${GITHUB_REPO}/releases/download/${GITHUB_RELEASE_TAG}/valhalla_tiles.tar.gz`,
   ADDRESSES: `https://github.com/${GITHUB_REPO}/releases/download/${GITHUB_RELEASE_TAG}/addresses.db`,
   STYLE: `https://github.com/${GITHUB_REPO}/releases/download/${GITHUB_RELEASE_TAG}/style.json`,
+  OSRM_CORE: `https://github.com/${GITHUB_REPO}/releases/download/${GITHUB_RELEASE_TAG}/uae.osrm`,
+  OSRM_EDGES: `https://github.com/${GITHUB_REPO}/releases/download/${GITHUB_RELEASE_TAG}/uae.osrm.edges`,
+  OSRM_NODES: `https://github.com/${GITHUB_REPO}/releases/download/${GITHUB_RELEASE_TAG}/uae.osrm.nodes`,
+  OSRM_GEOMETRY: `https://github.com/${GITHUB_REPO}/releases/download/${GITHUB_RELEASE_TAG}/uae.osrm.geometry`,
+  OSRM_NAMES: `https://github.com/${GITHUB_REPO}/releases/download/${GITHUB_RELEASE_TAG}/uae.osrm.names`,
+  OSRM_FILEINDEX: `https://github.com/${GITHUB_REPO}/releases/download/${GITHUB_RELEASE_TAG}/uae.osrm.fileIndex`,
+  OSRM_PROPERTIES: `https://github.com/${GITHUB_REPO}/releases/download/${GITHUB_RELEASE_TAG}/uae.osrm.properties`,
 };
 
 // File paths
 export const DATA_DIR = `${RNFS.DocumentDirectoryPath}/map_data`;
 export const MBTILES_PATH = `${DATA_DIR}/uae.mbtiles`;
-export const VALHALLA_DIR = `${DATA_DIR}/valhalla_tiles`;
+export const OSRM_DIR = `${DATA_DIR}/osrm`;
 export const ADDRESSES_DB_PATH = `${DATA_DIR}/addresses.db`;
 export const STYLE_PATH = `${DATA_DIR}/style.json`;
 export const VERSION_FILE = `${DATA_DIR}/version.txt`;

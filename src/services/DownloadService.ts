@@ -4,7 +4,7 @@ import {
   DATA_DIR,
   DOWNLOAD_URLS,
   MBTILES_PATH,
-  VALHALLA_DIR,
+  OSRM_DIR,
   ADDRESSES_DB_PATH,
   STYLE_PATH,
   VERSION_FILE,
@@ -28,7 +28,7 @@ class DownloadService {
     try {
       const exists = await Promise.all([
         RNFS.exists(MBTILES_PATH),
-        RNFS.exists(VALHALLA_DIR),
+        RNFS.exists(OSRM_DIR),
         RNFS.exists(ADDRESSES_DB_PATH),
         RNFS.exists(STYLE_PATH),
       ]);
@@ -72,9 +72,21 @@ class DownloadService {
       const files = [
         {url: DOWNLOAD_URLS.STYLE, path: STYLE_PATH, name: 'Map Style'},
         {url: DOWNLOAD_URLS.ADDRESSES, path: ADDRESSES_DB_PATH, name: 'Address Database'},
+        {url: DOWNLOAD_URLS.OSRM_CORE, path: `${OSRM_DIR}/uae.osrm`, name: 'Routing Core'},
+        {url: DOWNLOAD_URLS.OSRM_EDGES, path: `${OSRM_DIR}/uae.osrm.edges`, name: 'Routing Edges'},
+        {url: DOWNLOAD_URLS.OSRM_NODES, path: `${OSRM_DIR}/uae.osrm.nodes`, name: 'Routing Nodes'},
+        {url: DOWNLOAD_URLS.OSRM_GEOMETRY, path: `${OSRM_DIR}/uae.osrm.geometry`, name: 'Routing Geometry'},
+        {url: DOWNLOAD_URLS.OSRM_NAMES, path: `${OSRM_DIR}/uae.osrm.names`, name: 'Street Names'},
+        {url: DOWNLOAD_URLS.OSRM_FILEINDEX, path: `${OSRM_DIR}/uae.osrm.fileIndex`, name: 'OSRM Index'},
+        {url: DOWNLOAD_URLS.OSRM_PROPERTIES, path: `${OSRM_DIR}/uae.osrm.properties`, name: 'OSRM Properties'},
         {url: DOWNLOAD_URLS.MBTILES, path: MBTILES_PATH, name: 'Map Tiles'},
-        {url: DOWNLOAD_URLS.VALHALLA, path: `${DATA_DIR}/valhalla_tiles.tar.gz`, name: 'Routing Data'},
       ];
+
+      // Create OSRM directory
+      const osrmDirExists = await RNFS.exists(OSRM_DIR);
+      if (!osrmDirExists) {
+        await RNFS.mkdir(OSRM_DIR);
+      }
 
       for (const file of files) {
         const success = await this.downloadFile(file.url, file.path, file.name, onProgress);
@@ -83,15 +95,14 @@ class DownloadService {
         }
       }
 
-      // Extract Valhalla tiles
+      // No extraction needed - files downloaded directly
+      // No extraction needed - files downloaded directly
       onProgress({
         totalBytes: this.totalSize,
         downloadedBytes: this.downloadedSize,
         percentage: 95,
-        currentFile: 'Extracting routing data...',
+        currentFile: 'Finalizing...',
       });
-
-      await this.extractValhallaData();
 
       // Save version
       await RNFS.writeFile(VERSION_FILE, GITHUB_RELEASE_TAG, 'utf8');
@@ -154,29 +165,9 @@ class DownloadService {
     }
   }
 
-  private async extractValhallaData(): Promise<void> {
-    try {
-      const tarPath = `${DATA_DIR}/valhalla_tiles.tar.gz`;
-      
-      // Create valhalla directory
-      const dirExists = await RNFS.exists(VALHALLA_DIR);
-      if (!dirExists) {
-        await RNFS.mkdir(VALHALLA_DIR);
-      }
-
-      // Note: For production, you'll need a native module or pre-extracted files
-      // This is a placeholder - actual extraction needs native implementation
-      console.log('Valhalla tiles should be pre-extracted or extracted via native module');
-      
-      // For now, we'll assume the tar.gz contains a flat directory structure
-      // In production, upload pre-extracted files or implement native extraction
-      
-      // Delete tar file after extraction
-      await RNFS.unlink(tarPath);
-    } catch (error) {
-      console.error('Extract error:', error);
-      throw error;
-    }
+  private async extractOSRMData(): Promise<void> {
+    // No longer needed - files downloaded directly
+    console.log('OSRM files downloaded directly, no extraction needed');
   }
 
   async checkForUpdates(): Promise<{

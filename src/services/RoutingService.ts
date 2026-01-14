@@ -1,17 +1,16 @@
-import {VALHALLA_DIR} from '../utils/constants';
+import {DATA_DIR} from '../utils/constants';
 import {Route, Location} from '../types';
-
-// This is a placeholder for Valhalla integration
-// You'll need to implement native module bindings or use a pre-built library
+import OSRMModule from './OSRMModule';
 
 class RoutingService {
   private initialized = false;
 
   async initialize(): Promise<void> {
     try {
-      // TODO: Initialize Valhalla engine with tiles from VALHALLA_DIR
-      // For now, this is a mock implementation
-      console.log('Routing service initialized with tiles from:', VALHALLA_DIR);
+      // Initialize OSRM engine with data from DATA_DIR/osrm
+      const osrmPath = `${DATA_DIR}/osrm`;
+      await OSRMModule.initialize(osrmPath);
+      console.log('OSRM routing service initialized with data from:', osrmPath);
       this.initialized = true;
     } catch (error) {
       console.error('Routing initialization error:', error);
@@ -25,49 +24,73 @@ class RoutingService {
     }
 
     try {
-      // TODO: Implement actual Valhalla route calculation
-      // This is a mock implementation that returns a simple straight line
-      
       console.log('Calculating route from', from, 'to', to);
 
-      // Mock route for demonstration
-      // In production, this should call Valhalla native module
+      // Call native OSRM module for routing
+      const result = await OSRMModule.route(
+        { latitude: from.latitude, longitude: from.longitude },
+        { latitude: to.latitude, longitude: to.longitude }
+      );
+
+      if (!result) {
+        return null;
+      }
+
+      // Convert OSRM result to our Route format
       const route: Route = {
-        coordinates: [
-          [from.longitude, from.latitude],
-          [to.longitude, to.latitude],
-        ],
-        distance: this.calculateDistance(from, to),
-        duration: this.calculateDistance(from, to) / 10, // ~36 km/h average
-        instructions: [
-          {
-            text: 'Start your journey',
-            distance: 0,
-            time: 0,
-            type: 'start',
-            streetName: from.address,
-          },
-          {
-            text: `Head towards ${to.address}`,
-            distance: this.calculateDistance(from, to) * 0.8,
-            time: (this.calculateDistance(from, to) / 10) * 0.8,
-            type: 'straight',
-          },
-          {
-            text: 'You have arrived at your destination',
-            distance: this.calculateDistance(from, to),
-            time: this.calculateDistance(from, to) / 10,
-            type: 'arrive',
-            streetName: to.address,
-          },
-        ],
+        coordinates: result.coordinates as [number, number][],
+        distance: result.distance,
+        duration: result.duration,
+        instructions: result.instructions.map(inst => ({
+          text: inst.text,
+          distance: inst.distance,
+          time: inst.time,
+          type: inst.type,
+          streetName: inst.type === 'depart' ? from.address : 
+                     inst.type === 'arrive' ? to.address : undefined,
+        })),
       };
 
       return route;
     } catch (error) {
       console.error('Route calculation error:', error);
-      return null;
+      // Fallback to straight line if OSRM fails
+      return this.getFallbackRoute(from, to);
     }
+  }
+
+  private getFallbackRoute(from: Location, to: Location): Route {
+    // Fallback straight line route if OSRM fails
+    return {
+      coordinates: [
+        [from.longitude, from.latitude] as [number, number],
+        [to.longitude, to.latitude] as [number, number],
+      ],
+      distance: this.calculateDistance(from, to),
+      duration: this.calculateDistance(from, to) / 10,
+      instructions: [
+        {
+          text: 'Start your journey',
+          distance: 0,
+          time: 0,
+          type: 'start',
+          streetName: from.address,
+        },
+        {
+          text: `Head towards ${to.address}`,
+          distance: this.calculateDistance(from, to) * 0.8,
+          time: (this.calculateDistance(from, to) / 10) * 0.8,
+          type: 'straight',
+        },
+        {
+          text: 'You have arrived at your destination',
+          distance: this.calculateDistance(from, to),
+          time: this.calculateDistance(from, to) / 10,
+          type: 'arrive',
+          streetName: to.address,
+        },
+      ],
+    };
   }
 
   private calculateDistance(from: Location, to: Location): number {
