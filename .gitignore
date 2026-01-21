@@ -1,0 +1,5 @@
+# Local environment secrets
+.env
+
+# Generated secrets file (do NOT commit)
+here_offline_app/lib/secrets.dart

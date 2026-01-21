@@ -1,0 +1,24 @@
+name: here_offline_app
+description: Minimal app scaffold using HERE SDK (stub). Replace the stub plugin with the official HERE SDK package (heresdk-explore-flutter-4.25.0.0.250834) as explained in README.
+publish_to: 'none'
+environment:
+  sdk: '>=3.9.2 <4.0.0'
+  flutter: '>=3.35.7'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  path_provider: ^2.1.5
+  shared_preferences: ^2.0.15
+  geolocator: ^9.0.2
+
+  # Use the official HERE SDK package unpacked at workspace root
+  here_sdk:
+    path: ../../heresdk-explore-flutter-4.25.0.0.250834
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+flutter:
+  uses-material-design: true

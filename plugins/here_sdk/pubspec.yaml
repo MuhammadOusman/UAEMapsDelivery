@@ -1,0 +1,11 @@
+name: here_sdk
+version: 0.0.1
+description: Local stub for HERE SDK to allow development without installing official SDK.
+flutter:
+  plugin:
+    platforms:
+      android:
+        package: com.example.here_sdk_stub
+        pluginClass: HereSdkStubPlugin
+      ios:
+        pluginClass: HereSdkStubPlugin
