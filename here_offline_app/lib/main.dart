@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:here_sdk/core.dart';
 import 'package:here_sdk/core.engine.dart';
-import 'delivery_planner.dart';
 import 'delivery_strict.dart';
 
 // Credentials are loaded from `lib/secrets.dart` generated from `.env` (run `dart run tool/gen_secrets.dart`)
@@ -29,7 +28,7 @@ Future<void> _initializeHERESDK() async {
     await SDKNativeEngine.makeSharedInstance(sdkOptions);
   } on Exception catch (e) {
     // Initialization failed (likely due to missing/wrong credentials). We continue so the app UI can show instructions.
-    print('HERE SDK initialization failed: $e');
+    debugPrint('HERE SDK initialization failed: $e');
   }
 }
 

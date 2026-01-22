@@ -26,3 +26,9 @@ linter:
 
 # Additional information about this file can be found at
 # https://dart.dev/guides/language/analysis-options
+
+# Exclude heavy or generated SDK sources from analysis to avoid unrelated
+# analyzer errors coming from third-party SDK code in the workspace.
+analyzer:
+  exclude:
+    - '../heresdk-explore-flutter-4.25.0.0.250834/**'

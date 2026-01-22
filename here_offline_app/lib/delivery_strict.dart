@@ -50,12 +50,12 @@ class _DeliveryStrictScreenState extends State<DeliveryStrictScreen> {
     try {
       _searchEngine = SearchEngine();
     } catch (e) {
-      print('Search init failed: $e');
+      debugPrint('Search init failed: $e');
     }
     try {
       _routingEngine = here.RoutingEngine();
     } catch (e) {
-      print('Routing init failed: $e');
+      debugPrint('Routing init failed: $e');
     }
     WidgetsBinding.instance.addPostFrameCallback((_) => _initLocation());
   }
@@ -73,7 +73,7 @@ class _DeliveryStrictScreenState extends State<DeliveryStrictScreen> {
     _hereMapController = controller;
     controller.mapScene.loadSceneForMapScheme(MapScheme.normalDay, (MapError? error) {
       if (error != null) {
-        print('Scene load failed: $error');
+        debugPrint('Scene load failed: $error');
         return;
       }
       if (_userCoords != null) {
@@ -97,11 +97,12 @@ class _DeliveryStrictScreenState extends State<DeliveryStrictScreen> {
       _userCoords = GeoCoordinates(pos.latitude, pos.longitude);
       if (_hereMapController != null) {
         _addUserMarker(_userCoords!);
-        _hereMapController!.camera.lookAtPoint(_userCoords!);
+        // center closer so local roads/details are visible during testing
+        _centerToCoords(_userCoords!, 200);
       }
       setState(() {});
     } catch (e) {
-      print('Location error: $e');
+      debugPrint('Location error: $e');
     }
   }
 
@@ -120,15 +121,6 @@ class _DeliveryStrictScreenState extends State<DeliveryStrictScreen> {
     _markers.add(m);
   }
 
-  void _addMarker(GeoCoordinates coords, String colorHex) {
-    if (_hereMapController == null) return;
-    final svg = '''<svg xmlns="http://www.w3.org/2000/svg" width="36" height="36"><circle cx="18" cy="18" r="9" fill="$colorHex" stroke="#fff" stroke-width="2"/></svg>''';
-    final data = Uint8List.fromList(svg.codeUnits);
-    final img = MapImage.withImageDataImageFormatWidthAndHeight(data, ImageFormat.svg, 36, 36);
-    final m = MapMarker(coords, img);
-    _hereMapController!.mapScene.addMapMarker(m);
-    _markers.add(m);
-  }
 
   void _clearPolylines() {
     for (final p in _polylines) {
@@ -191,7 +183,11 @@ class _DeliveryStrictScreenState extends State<DeliveryStrictScreen> {
     // clear polylines and draw user->pickup
     _clearPolylines();
     _userToPickupRoute = await _calcRoute(_userCoords!, _pickupCoords!);
-    if (_userToPickupRoute != null) _showLeg(_userToPickupRoute!, Colors.orange);
+    if (_userToPickupRoute != null) {
+      _showLeg(_userToPickupRoute!, Colors.orange);
+      // center to show the leg region and prefer a detail-friendly zoom
+      _centerToInclude(_userCoords!, _pickupCoords!);
+    }
   }
 
   Future<void> _onDropSelected() async {
@@ -200,6 +196,9 @@ class _DeliveryStrictScreenState extends State<DeliveryStrictScreen> {
     if (_pickupToDropRoute != null) {
       // keep user->pickup if present, add pickup->drop polyline
       _showLeg(_pickupToDropRoute!, Colors.blue);
+
+      // center to show this leg region and prefer a detail-friendly zoom
+      _centerToInclude(_pickupCoords!, _dropCoords!);
 
       // store summary to display below fields (no popup)
       final totalMeters = (_userToPickupRoute?.lengthInMeters ?? 0) + (_pickupToDropRoute?.lengthInMeters ?? 0);
@@ -215,99 +214,147 @@ class _DeliveryStrictScreenState extends State<DeliveryStrictScreen> {
     return '${km.toStringAsFixed(1)} km';
   }
 
+  String _formatDuration(Duration d) {
+    final h = d.inHours;
+    final m = d.inMinutes % 60;
+    if (h > 0) return '${h}h ${m}m';
+    return '${m} min';
+  }
+
+  // Center camera to given coordinates at specified distance (meters) and tilt for better detail visibility
+  void _centerToCoords(GeoCoordinates coords, double meters) {
+    if (_hereMapController == null) return;
+    // Allow much closer minimum so local streets become visible (down to ~8m)
+    final m = meters.clamp(8.0, 3000.0);
+    try {
+      debugPrint('Centering to ${coords.latitude},${coords.longitude} at ${m}m');
+      _hereMapController!.camera.lookAtPointWithMeasure(coords, MapMeasure(MapMeasureKind.distanceInMeters, m));
+      // tilt more for a third-person / neighborhood view
+      _hereMapController!.camera.setOrientationAtTarget(GeoOrientationUpdate(0.0, 65.0));
+    } catch (_) {}
+  }
+
+  // Center camera to include two coordinates while aiming to show local details when they are close
+  void _centerToInclude(GeoCoordinates a, GeoCoordinates b) {
+    if (_hereMapController == null) return;
+    final dist = a.distanceTo(b);
+    double meters;
+    if (dist < 50) {
+      // extremely close - zoom right to neighborhood level
+      meters = (dist * 1.0).clamp(8.0, 120.0);
+    } else if (dist < 500) {
+      // local span
+      meters = (dist * 0.7).clamp(20.0, 600.0);
+    } else {
+      // longer spans - overview but not too far
+      meters = (dist * 0.6).clamp(200.0, 4000.0);
+    }
+    final mid = GeoCoordinates((a.latitude + b.latitude) / 2.0, (a.longitude + b.longitude) / 2.0);
+    debugPrint('Centering to include points dist=${dist} -> meters=${meters}');
+    _centerToCoords(mid, meters);
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       body: SafeArea(
-        child: Column(
+        child: Stack(
           children: [
-            // Fields at the top (strict request)
-            Padding(
-              padding: const EdgeInsets.all(12.0),
-              child: Card(
-                child: Padding(
+            Column(
+              children: [
+                // Fields at the top (strict request)
+                Padding(
                   padding: const EdgeInsets.all(12.0),
-                  child: Column(
-                    children: [
-                      TextField(controller: _customerController, decoration: const InputDecoration(prefixIcon: Icon(Icons.person_outline), hintText: 'Customer name (optional)')),
-                      const SizedBox(height: 8),
-                      TextField(controller: _pickupController, decoration: const InputDecoration(prefixIcon: Icon(Icons.circle), hintText: 'Pickup'), onTap: () => setState(() { _focusedField = 'pickup'; _suggestions = []; }), onChanged: (v) => _onQueryChanged('pickup', v)),
-                      const SizedBox(height: 8),
-                      TextField(controller: _dropController, decoration: const InputDecoration(prefixIcon: Icon(Icons.location_on), hintText: 'Drop-off'), onTap: () => setState(() { _focusedField = 'drop'; _suggestions = []; }), onChanged: (v) => _onQueryChanged('drop', v)),
+                  child: Card(
+                    child: Padding(
+                      padding: const EdgeInsets.all(12.0),
+                      child: Column(
+                        children: [
+                          TextField(controller: _customerController, decoration: const InputDecoration(prefixIcon: Icon(Icons.person_outline), hintText: 'Customer name (optional)')),
+                          const SizedBox(height: 8),
+                          TextField(controller: _pickupController, decoration: const InputDecoration(prefixIcon: Icon(Icons.circle), hintText: 'Pickup'), onTap: () => setState(() { _focusedField = 'pickup'; _suggestions = []; }), onChanged: (v) => _onQueryChanged('pickup', v)),
+                          const SizedBox(height: 8),
+                          TextField(controller: _dropController, decoration: const InputDecoration(prefixIcon: Icon(Icons.location_on), hintText: 'Drop-off'), onTap: () => setState(() { _focusedField = 'drop'; _suggestions = []; }), onChanged: (v) => _onQueryChanged('drop', v)),
 
-                      if (_suggestLoading) const Padding(padding: EdgeInsets.only(top: 8.0), child: LinearProgressIndicator()),
+                          if (_suggestLoading) const Padding(padding: EdgeInsets.only(top: 8.0), child: LinearProgressIndicator()),
 
-                      if (_suggestions.isNotEmpty)
-                        SizedBox(height: 160, child: ListView.builder(itemCount: _suggestions.length, itemBuilder: (context, i) {
-                          final s = _suggestions[i];
-                          return ListTile(
-                            title: Text(s.title),
-                            subtitle: s.place?.address.addressText != null ? Text(s.place!.address.addressText) : null,
-                            onTap: () async {
-                              GeoCoordinates? coords = s.place?.geoCoordinates;
-                              if (coords == null && s.id != null) {
-                                final p = await _fetchPlaceById(s.id!);
-                                coords = p?.geoCoordinates;
-                              }
-                              if (coords == null) return;
-                              setState(() {
-                                if (_focusedField == 'pickup') {
-                                  _pickupCoords = coords;
-                                  _pickupController.text = s.title;
-                                } else {
-                                  _dropCoords = coords;
-                                  _dropController.text = s.title;
-                                }
-                                _suggestions = [];
-                              });
+                          if (_suggestions.isNotEmpty)
+                            SizedBox(height: 160, child: ListView.builder(itemCount: _suggestions.length, itemBuilder: (context, i) {
+                              final s = _suggestions[i];
+                              return ListTile(
+                                title: Text(s.title),
+                                subtitle: s.place?.address.addressText != null ? Text(s.place!.address.addressText) : null,
+                                onTap: () async {
+                                  GeoCoordinates? coords = s.place?.geoCoordinates;
+                                  if (coords == null && s.id != null) {
+                                    final p = await _fetchPlaceById(s.id!);
+                                    coords = p?.geoCoordinates;
+                                  }
+                                  if (coords == null) return;
+                                  setState(() {
+                                    if (_focusedField == 'pickup') {
+                                      _pickupCoords = coords;
+                                      _pickupController.text = s.title;
+                                    } else {
+                                      _dropCoords = coords;
+                                      _dropController.text = s.title;
+                                    }
+                                    _suggestions = [];
+                                  });
 
-                              // Trigger route calculations (no pickup/drop markers added)
-                              if (_focusedField == 'pickup') await _onPickupSelected(); else await _onDropSelected();
-                            },
-                          );
-                        })),
-                    ],
+                                  // Trigger route calculations (no pickup/drop markers added)
+                                  if (_focusedField == 'pickup') await _onPickupSelected(); else await _onDropSelected();
+                                },
+                              );
+                            })),
+                        ],
+                      ),
+                    ),
                   ),
                 ),
-              ),
+
+                // Map fills the rest; it should show only the user's marker and polylines
+                Expanded(child: HereMap(onMapCreated: _onMapCreated)),
+
+                // add spacing so map content isn't obscured by floating card
+                const SizedBox(height: 96),
+              ],
             ),
 
-            // Trip details card (under fields) — appears when summary exists
+            // Bottom card combining trip info and Start button
             if (_totalMeters != null && _totalDuration != null)
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 6.0),
+              Positioned(
+                left: 12,
+                right: 12,
+                bottom: 20,
                 child: Card(
-                  elevation: 2,
+                  elevation: 4,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                   child: Padding(
-                    padding: const EdgeInsets.all(12.0),
+                    padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 12.0),
                     child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text('Total distance', style: TextStyle(color: Colors.grey[700])), Text(_formatLength(_totalMeters!), style: const TextStyle(fontWeight: FontWeight.bold))]),
-                        Column(crossAxisAlignment: CrossAxisAlignment.end, children: [Text('ETA', style: TextStyle(color: Colors.grey[700])), Text('${_totalDuration!.inMinutes} min', style: const TextStyle(fontWeight: FontWeight.bold))]),
+                        Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(_formatLength(_totalMeters!), style: TextStyle(color: Colors.grey[700])), const SizedBox(height: 4), Text(_formatDuration(_totalDuration!), style: const TextStyle(fontWeight: FontWeight.bold))]),
+                        const Spacer(),
+                        ElevatedButton.icon(
+                          onPressed: (_pickupCoords != null && _dropCoords != null)
+                              ? () {
+                                  Navigator.of(context).push(MaterialPageRoute(builder: (_) => DeliveryNextScreen(
+                                    userCoords: _userCoords!,
+                                    pickupCoords: _pickupCoords!,
+                                    dropCoords: _dropCoords!,
+                                  )));
+                                }
+                              : null,
+                          icon: const Icon(Icons.play_arrow),
+                          label: const Text('Start'),
+                          style: ElevatedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12)),
+                        ),
                       ],
                     ),
                   ),
                 ),
               ),
-
-            // Start button (strict requirement): enabled only when both pickup & drop are set
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 6.0),
-              child: ElevatedButton(
-                onPressed: (_pickupCoords != null && _dropCoords != null)
-                    ? () {
-                        Navigator.of(context).push(MaterialPageRoute(builder: (_) => const DeliveryNextScreen()));
-                      }
-                    : null,
-                style: ElevatedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
-                child: const Text('Start'),
-              ),
-            ),
-
-            // Map fills the rest; it should show only the user's marker and polylines
-            Expanded(child: HereMap(onMapCreated: _onMapCreated)),
-
           ],
         ),
       ),
