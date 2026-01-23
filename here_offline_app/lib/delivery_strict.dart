@@ -6,7 +6,6 @@ import 'package:here_sdk/core.dart';
 import 'package:here_sdk/mapview.dart';
 import 'package:here_sdk/search.dart';
 import 'package:here_sdk/routing.dart' as here;
-import 'package:geolocator/geolocator.dart';
 import 'delivery_next.dart';
 
 class DeliveryStrictScreen extends StatefulWidget {
@@ -25,6 +24,11 @@ class _DeliveryStrictScreenState extends State<DeliveryStrictScreen> {
   GeoCoordinates? _userCoords;
   GeoCoordinates? _pickupCoords;
   GeoCoordinates? _dropCoords;
+
+  // Karachi center to bias search when user location is elsewhere.
+  final GeoCoordinates _karachiCenter = GeoCoordinates(24.8607, 67.0011);
+  // Temporary fixed user position in Dubai (requested override until restoration).
+  final GeoCoordinates _dubaiTestCoords = GeoCoordinates(25.2048, 55.2708);
 
   late SearchEngine _searchEngine;
   late here.RoutingEngine _routingEngine;
@@ -76,6 +80,7 @@ class _DeliveryStrictScreenState extends State<DeliveryStrictScreen> {
         debugPrint('Scene load failed: $error');
         return;
       }
+
       if (_userCoords != null) {
         _addUserMarker(_userCoords!);
         _hereMapController?.camera.lookAtPoint(_userCoords!);
@@ -84,26 +89,13 @@ class _DeliveryStrictScreenState extends State<DeliveryStrictScreen> {
   }
 
   Future<void> _initLocation() async {
-    try {
-      final serviceEnabled = await Geolocator.isLocationServiceEnabled();
-      if (!serviceEnabled) return;
-      LocationPermission permission = await Geolocator.checkPermission();
-      if (permission == LocationPermission.denied) {
-        permission = await Geolocator.requestPermission();
-        if (permission == LocationPermission.denied) return;
-      }
-      if (permission == LocationPermission.deniedForever) return;
-      final pos = await Geolocator.getCurrentPosition(desiredAccuracy: LocationAccuracy.best);
-      _userCoords = GeoCoordinates(pos.latitude, pos.longitude);
-      if (_hereMapController != null) {
-        _addUserMarker(_userCoords!);
-        // center closer so local roads/details are visible during testing
-        _centerToCoords(_userCoords!, 200);
-      }
-      setState(() {});
-    } catch (e) {
-      debugPrint('Location error: $e');
+    // TEMP override: fixed Dubai location; restore live Geolocator flow when requested.
+    _userCoords = _dubaiTestCoords;
+    if (_hereMapController != null) {
+      _addUserMarker(_userCoords!);
+      _centerToCoords(_userCoords!, 200);
     }
+    setState(() {});
   }
 
   void _addUserMarker(GeoCoordinates coords) {
@@ -158,7 +150,8 @@ class _DeliveryStrictScreenState extends State<DeliveryStrictScreen> {
     if (query.isEmpty) { setState(() { _suggestions = []; _suggestLoading = false; }); return; }
     setState(() { _suggestLoading = true; _focusedField = field; });
     _debounce = Timer(const Duration(milliseconds: 300), () {
-      final tq = TextQuery.withArea(query, TextQueryArea.withCenter(GeoCoordinates(25.2048, 55.2708)));
+      final biasCenter = _userCoords ?? _karachiCenter;
+      final tq = TextQuery.withArea(query, TextQueryArea.withCenter(biasCenter));
       _searchEngine.suggestExtended(tq, SearchOptions(), (SearchError? err, List<Suggestion>? s, ResponseDetails? r) {
         setState(() { _suggestLoading = false; _suggestions = s ?? []; });
       });
@@ -197,8 +190,10 @@ class _DeliveryStrictScreenState extends State<DeliveryStrictScreen> {
       // keep user->pickup if present, add pickup->drop polyline
       _showLeg(_pickupToDropRoute!, Colors.blue);
 
-      // center to show this leg region and prefer a detail-friendly zoom
-      _centerToInclude(_pickupCoords!, _dropCoords!);
+      // center to show the full route (user + pickup + drop) automatically
+      final pins = <GeoCoordinates>[_pickupCoords!, _dropCoords!];
+      if (_userCoords != null) pins.add(_userCoords!);
+      _centerToAllPins(pins);
 
       // store summary to display below fields (no popup)
       final totalMeters = (_userToPickupRoute?.lengthInMeters ?? 0) + (_pickupToDropRoute?.lengthInMeters ?? 0);
@@ -225,12 +220,13 @@ class _DeliveryStrictScreenState extends State<DeliveryStrictScreen> {
   void _centerToCoords(GeoCoordinates coords, double meters) {
     if (_hereMapController == null) return;
     // Allow much closer minimum so local streets become visible (down to ~8m)
-    final m = meters.clamp(8.0, 3000.0);
+    // Reduce the maximum clamp and use a top-down (0° tilt) orientation for a normal map view.
+    final m = meters.clamp(8.0, 2000.0);
     try {
       debugPrint('Centering to ${coords.latitude},${coords.longitude} at ${m}m');
       _hereMapController!.camera.lookAtPointWithMeasure(coords, MapMeasure(MapMeasureKind.distanceInMeters, m));
-      // tilt more for a third-person / neighborhood view
-      _hereMapController!.camera.setOrientationAtTarget(GeoOrientationUpdate(0.0, 65.0));
+      // use flat top-down view for clearer local street rendering
+      _hereMapController!.camera.setOrientationAtTarget(GeoOrientationUpdate(0.0, 0.0));
     } catch (_) {}
   }
 
@@ -252,6 +248,45 @@ class _DeliveryStrictScreenState extends State<DeliveryStrictScreen> {
     final mid = GeoCoordinates((a.latitude + b.latitude) / 2.0, (a.longitude + b.longitude) / 2.0);
     debugPrint('Centering to include points dist=${dist} -> meters=${meters}');
     _centerToCoords(mid, meters);
+  }
+
+  // Center to fit all provided points with padding so the full route is visible
+  void _centerToAllPins(List<GeoCoordinates> points) {
+    if (_hereMapController == null || points.isEmpty) return;
+    if (points.length == 1) {
+      _centerToCoords(points.first, 120);
+      return;
+    }
+
+    double minLat = points.first.latitude;
+    double maxLat = points.first.latitude;
+    double minLon = points.first.longitude;
+    double maxLon = points.first.longitude;
+
+    for (final p in points.skip(1)) {
+      if (p.latitude < minLat) minLat = p.latitude;
+      if (p.latitude > maxLat) maxLat = p.latitude;
+      if (p.longitude < minLon) minLon = p.longitude;
+      if (p.longitude > maxLon) maxLon = p.longitude;
+    }
+
+    final center = GeoCoordinates((minLat + maxLat) / 2.0, (minLon + maxLon) / 2.0);
+
+    final corners = [
+      GeoCoordinates(minLat, minLon),
+      GeoCoordinates(minLat, maxLon),
+      GeoCoordinates(maxLat, minLon),
+      GeoCoordinates(maxLat, maxLon),
+    ];
+
+    double maxRadius = 0;
+    for (final c in corners) {
+      final d = c.distanceTo(center);
+      if (d > maxRadius) maxRadius = d;
+    }
+
+    final meters = (maxRadius * 2.4).clamp(80.0, 8000.0);
+    _centerToCoords(center, meters);
   }
 
   @override
@@ -302,8 +337,11 @@ class _DeliveryStrictScreenState extends State<DeliveryStrictScreen> {
                                     _suggestions = [];
                                   });
 
-                                  // Trigger route calculations (no pickup/drop markers added)
-                                  if (_focusedField == 'pickup') await _onPickupSelected(); else await _onDropSelected();
+                                  if (_focusedField == 'pickup') {
+                                    await _onPickupSelected();
+                                  } else {
+                                    await _onDropSelected();
+                                  }
                                 },
                               );
                             })),
@@ -315,6 +353,8 @@ class _DeliveryStrictScreenState extends State<DeliveryStrictScreen> {
 
                 // Map fills the rest; it should show only the user's marker and polylines
                 Expanded(child: HereMap(onMapCreated: _onMapCreated)),
+
+
 
                 // add spacing so map content isn't obscured by floating card
                 const SizedBox(height: 96),
@@ -343,6 +383,7 @@ class _DeliveryStrictScreenState extends State<DeliveryStrictScreen> {
                                     userCoords: _userCoords!,
                                     pickupCoords: _pickupCoords!,
                                     dropCoords: _dropCoords!,
+                                    customerName: _customerController.text.isEmpty ? '<unknown>' : _customerController.text,
                                   )));
                                 }
                               : null,

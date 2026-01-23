@@ -1,18 +1,20 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:here_sdk/core.dart';
 import 'package:here_sdk/mapview.dart';
 import 'package:here_sdk/routing.dart' as here;
-import 'package:geolocator/geolocator.dart';
 
+// Live location disabled temporarily; using fixed Dubai test coordinate.
 class DeliveryNextScreen extends StatefulWidget {
   final GeoCoordinates userCoords;
   final GeoCoordinates pickupCoords;
   final GeoCoordinates dropCoords;
+  final String customerName;
 
-  const DeliveryNextScreen({Key? key, required this.userCoords, required this.pickupCoords, required this.dropCoords}) : super(key: key);
+  const DeliveryNextScreen({Key? key, required this.userCoords, required this.pickupCoords, required this.dropCoords, required this.customerName}) : super(key: key);
 
   @override
   State<DeliveryNextScreen> createState() => _DeliveryNextScreenState();
@@ -24,17 +26,23 @@ class _DeliveryNextScreenState extends State<DeliveryNextScreen> {
   here.Route? _route;
 
   MapMarker? _userMarker;
-  StreamSubscription<Position>? _posSub;
+  MapMarker? _pickupMarker;
+  MapMarker? _dropMarker;
+
+  double? _currentSpeedKph; // Speed will show when live GPS is restored.
+  bool _pickedUp = false;
+  GeoCoordinates? _currentCoords; // track current arrow position
 
   final List<MapPolyline> _polylines = [];
 
   List<String> _maneuverTexts = [];
-  int _nextManeuverIndex = 0;
   String _currentManeuver = '';
 
-  // trip summary
   int? _totalMeters;
   Duration? _totalDuration;
+
+  // TEMP spoofed user location (Dubai) until live location is restored.
+  final GeoCoordinates _dubaiTestCoords = GeoCoordinates(25.2048, 55.2708);
 
   @override
   void initState() {
@@ -46,33 +54,24 @@ class _DeliveryNextScreenState extends State<DeliveryNextScreen> {
     }
   }
 
-  @override
-  void dispose() {
-    _posSub?.cancel();
-    super.dispose();
-  }
-
   void _onMapCreated(HereMapController controller) {
     _hereMapController = controller;
-    // Use the light map scheme (user requested light theme)
     controller.mapScene.loadSceneForMapScheme(MapScheme.normalDay, (MapError? e) {
       if (e != null) { debugPrint('Scene load failed: $e'); return; }
-      // draw route and center camera
       _calculateAndShowRoute();
-      // add user marker
-      _addOrMoveUserMarker(widget.userCoords);
-      _startLocationUpdates();
-      // set an initial close third-person camera view (tighter for street detail)
+      _addOrMoveUserMarker(_dubaiTestCoords, heading: 0);
+      _addPickupDropMarkers();
       try {
-        debugPrint('Initial camera: centering at user ${widget.userCoords.latitude},${widget.userCoords.longitude}');
-        _hereMapController?.camera.lookAtPointWithMeasure(widget.userCoords, MapMeasure(MapMeasureKind.distanceInMeters, 20));
-        _hereMapController?.camera.setOrientationAtTarget(GeoOrientationUpdate(0.0, 65.0));
+        // Orient the initial view toward the pickup location
+        final headingToPickup = _bearingBetween(_dubaiTestCoords, widget.pickupCoords);
+        _hereMapController?.camera.lookAtPointWithMeasure(_dubaiTestCoords, MapMeasure(MapMeasureKind.distanceInMeters, 20));
+        _hereMapController?.camera.setOrientationAtTarget(GeoOrientationUpdate(headingToPickup, 65.0));
       } catch (_) {}
     });
   }
 
   Future<void> _calculateAndShowRoute() async {
-    final start = here.Waypoint.withDefaults(widget.userCoords);
+    final start = here.Waypoint.withDefaults(_dubaiTestCoords);
     final mid = here.Waypoint.withDefaults(widget.pickupCoords);
     final end = here.Waypoint.withDefaults(widget.dropCoords);
 
@@ -87,7 +86,6 @@ class _DeliveryNextScreenState extends State<DeliveryNextScreen> {
 
     _route = await comp.future;
     if (_route != null && _hereMapController != null) {
-      // draw each section separately with white border + colored core (orange for first leg, blue for second)
       _clearPolylines();
       int idx = 0;
       int totalMeters = 0;
@@ -99,11 +97,9 @@ class _DeliveryNextScreenState extends State<DeliveryNextScreen> {
         totalSeconds += s.duration.inSeconds;
         idx++;
       }
-
       _totalMeters = totalMeters;
       _totalDuration = Duration(seconds: totalSeconds);
 
-      // extract maneuvers (text + short distance)
       _maneuverTexts = [];
       for (final s in _route!.sections) {
         for (final m in s.maneuvers) {
@@ -112,15 +108,16 @@ class _DeliveryNextScreenState extends State<DeliveryNextScreen> {
       }
       if (_maneuverTexts.isNotEmpty) {
         _currentManeuver = _maneuverTexts.first;
-        _nextManeuverIndex = 0;
       }
 
-      // zoom closer and tilt for third-person view and center on the initial leg (tighter for street detail)
       try {
-        final firstVertex = _route!.sections.first.geometry.vertices.first;
-        debugPrint('Centering on route start ${firstVertex.latitude},${firstVertex.longitude}');
-        _hereMapController!.camera.lookAtPointWithMeasure(firstVertex, MapMeasure(MapMeasureKind.distanceInMeters, 30));
-        _hereMapController!.camera.setOrientationAtTarget(GeoOrientationUpdate(0.0, 65.0));
+        final verts = _route!.sections.first.geometry.vertices;
+        final firstVertex = verts.first;
+        final nextVertex = verts.length > 1 ? verts[1] : firstVertex;
+        final heading = _bearingBetween(firstVertex, nextVertex);
+        _addOrMoveUserMarker(_dubaiTestCoords, heading: heading);
+        _hereMapController!.camera.lookAtPointWithMeasure(firstVertex, MapMeasure(MapMeasureKind.distanceInMeters, 80));
+        _hereMapController!.camera.setOrientationAtTarget(GeoOrientationUpdate(heading, 70.0));
       } catch (_) {}
       setState(() {});
     }
@@ -156,74 +153,332 @@ class _DeliveryNextScreenState extends State<DeliveryNextScreen> {
     _polylines.add(main);
   }
 
-  void _addOrMoveUserMarker(GeoCoordinates coords) {
+  void _addPickupDropMarkers() {
+    if (_hereMapController == null) return;
+    for (final m in [_pickupMarker, _dropMarker]) {
+      if (m != null) {
+        try { _hereMapController!.mapScene.removeMapMarker(m); } catch (_) {}
+      }
+    }
+    _pickupMarker = null;
+    _dropMarker = null;
+
+    const pickupSvg = '''<svg xmlns="http://www.w3.org/2000/svg" width="44" height="44" viewBox="0 0 44 44">
+      <path d="M22 3 C14 3 8 9 8 17 c0 9 14 24 14 24s14-15 14-24C36 9 30 3 22 3z" fill="#1FB141" stroke="#ffffff" stroke-width="2"/>
+      <circle cx="22" cy="17" r="6" fill="#ffffff"/>
+    </svg>''';
+    const dropSvg = '''<svg xmlns="http://www.w3.org/2000/svg" width="44" height="44" viewBox="0 0 44 44">
+      <path d="M22 3 C14 3 8 9 8 17 c0 9 14 24 14 24s14-15 14-24C36 9 30 3 22 3z" fill="#FF5722" stroke="#ffffff" stroke-width="2"/>
+      <circle cx="22" cy="17" r="6" fill="#ffffff"/>
+    </svg>''';
+
+    final pickupImg = MapImage.withImageDataImageFormatWidthAndHeight(Uint8List.fromList(pickupSvg.codeUnits), ImageFormat.svg, 44, 44);
+    final dropImg = MapImage.withImageDataImageFormatWidthAndHeight(Uint8List.fromList(dropSvg.codeUnits), ImageFormat.svg, 44, 44);
+
+    _pickupMarker = MapMarker(widget.pickupCoords, pickupImg);
+    _dropMarker = MapMarker(widget.dropCoords, dropImg);
+    _hereMapController!.mapScene.addMapMarker(_pickupMarker!);
+    _hereMapController!.mapScene.addMapMarker(_dropMarker!);
+  }
+
+  void _recenterCamera() {
+    if (_hereMapController == null) return;
+    try {
+      if (_route != null) {
+        final verts = _route!.sections.first.geometry.vertices;
+        final firstVertex = verts.first;
+        final nextVertex = verts.length > 1 ? verts[1] : firstVertex;
+        final heading = _bearingBetween(firstVertex, nextVertex);
+        _hereMapController!.camera.lookAtPointWithMeasure(firstVertex, MapMeasure(MapMeasureKind.distanceInMeters, 80));
+        _hereMapController!.camera.setOrientationAtTarget(GeoOrientationUpdate(heading, 70.0));
+        _addOrMoveUserMarker(_pickedUp ? widget.pickupCoords : _dubaiTestCoords, heading: heading);
+        return;
+      }
+      _hereMapController!.camera.lookAtPointWithMeasure(_dubaiTestCoords, MapMeasure(MapMeasureKind.distanceInMeters, 80));
+      _hereMapController!.camera.setOrientationAtTarget(GeoOrientationUpdate(0.0, 70.0));
+      _addOrMoveUserMarker(_dubaiTestCoords, heading: 0);
+    } catch (_) {}
+  }
+
+  void _addOrMoveUserMarker(GeoCoordinates coords, {double heading = 0}) {
     if (_hereMapController == null) return;
     if (_userMarker != null) {
       try { _hereMapController!.mapScene.removeMapMarker(_userMarker!); } catch (_) {}
       _userMarker = null;
     }
-    final svg = '''<svg xmlns="http://www.w3.org/2000/svg" width="36" height="36"><circle cx="18" cy="18" r="9" fill="#0077FF" stroke="#fff" stroke-width="2"/></svg>''';
+    const svg = '''<svg xmlns="http://www.w3.org/2000/svg" width="192" height="192" viewBox="0 0 64 64">
+      <defs>
+        <linearGradient id="grad" x1="0%" y1="0%" x2="0%" y2="100%">
+          <stop offset="0%" stop-color="#1A73E8"/>
+          <stop offset="100%" stop-color="#0B58C6"/>
+        </linearGradient>
+        <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%">
+          <feDropShadow dx="0" dy="3" stdDeviation="3" flood-color="#000" flood-opacity="0.35"/>
+        </filter>
+      </defs>
+      <g filter="url(#shadow)">
+        <path d="M32 4 L48 44 L32 36 L16 44 Z" fill="url(#grad)" stroke="#ffffff" stroke-width="3" stroke-linejoin="round"/>
+        <circle cx="32" cy="36" r="5" fill="#ffffff" fill-opacity="0.9"/>
+      </g>
+    </svg>''';
     final data = Uint8List.fromList(svg.codeUnits);
-    final img = MapImage.withImageDataImageFormatWidthAndHeight(data, ImageFormat.svg, 36, 36);
-    _userMarker = MapMarker(coords, img);
+    final img = MapImage.withImageDataImageFormatWidthAndHeight(data, ImageFormat.svg, 192, 192);
+    _userMarker = MapMarker.withAnchor(coords, img, Anchor2D.withHorizontalAndVertical(0.5, 1.0));
     _hereMapController!.mapScene.addMapMarker(_userMarker!);
+    // remember where we placed the arrow so pickup can reroute from this point if pressed early
+    _currentCoords = coords;
   }
 
-  // End trip: stop location updates, clear overlays and return to the main planner
-  void _endTrip() {
-    _posSub?.cancel();
-    _posSub = null;
+  void _endTrip({bool popToRoot = true}) {
     try {
       if (_userMarker != null) _hereMapController?.mapScene.removeMapMarker(_userMarker!);
+      if (_pickupMarker != null) _hereMapController?.mapScene.removeMapMarker(_pickupMarker!);
+      if (_dropMarker != null) _hereMapController?.mapScene.removeMapMarker(_dropMarker!);
     } catch (_) {}
     for (final p in _polylines) {
       try { _hereMapController?.mapScene.removeMapPolyline(p); } catch (_) {}
     }
     _polylines.clear();
-    // navigate back to the first screen
-    if (mounted) Navigator.of(context).popUntil((r) => r.isFirst);
+    if (popToRoot && mounted) Navigator.of(context).popUntil((r) => r.isFirst);
   }
 
-  void _startLocationUpdates() async {
-    final serviceEnabled = await Geolocator.isLocationServiceEnabled();
-    if (!serviceEnabled) return;
-    LocationPermission permission = await Geolocator.checkPermission();
-    if (permission == LocationPermission.denied) {
-      permission = await Geolocator.requestPermission();
-      if (permission == LocationPermission.denied) return;
-    }
-    if (permission == LocationPermission.deniedForever) return;
-
-    _posSub = Geolocator.getPositionStream(locationSettings: const LocationSettings(accuracy: LocationAccuracy.best, distanceFilter: 2)).listen((pos) {
-      final coords = GeoCoordinates(pos.latitude, pos.longitude);
-      _addOrMoveUserMarker(coords);
-
-      // follow with camera (third-person effect) — zoom in and tilt
-      try {
-        // If heading available, use it for orientation
-        final heading = (pos.heading.isFinite && pos.heading >= 0) ? pos.heading : 0.0;
-          // center on user and set orientation (bearing + tilt) for a tight third-person view
-          try {
-            _hereMapController?.camera.lookAtPointWithMeasure(coords, MapMeasure(MapMeasureKind.distanceInMeters, 20));
-            _hereMapController?.camera.setOrientationAtTarget(GeoOrientationUpdate(heading, 65.0));
-          } catch (_) {}
-        } catch (_) {}
-
-      // update maneuver index simple heuristic: advance if near next maneuver coordinate
-      if (_route != null) {
-        final maneuvers = _route!.sections.expand((s) => s.maneuvers).toList();
-        if (_nextManeuverIndex < maneuvers.length) {
-          final nextM = maneuvers[_nextManeuverIndex];
-          final d = nextM.coordinates.distanceTo(coords);
-          if (d < 25) {
-            _nextManeuverIndex++;
-            if (_nextManeuverIndex < maneuvers.length) _currentManeuver = '${maneuvers[_nextManeuverIndex].text} • ${maneuvers[_nextManeuverIndex].lengthInMeters} m';
-            setState(() {});
-          }
-        }
-      }
+  Future<void> _routeFromPickupToDrop([GeoCoordinates? startOverride]) async {
+    // Recalculate route starting at pickup -> drop, allowing optional starting point.
+    final startCoord = startOverride ?? widget.pickupCoords;
+    final start = here.Waypoint.withDefaults(startCoord);
+    final end = here.Waypoint.withDefaults(widget.dropCoords);
+    final comp = Completer<here.Route?>();
+    final opts = here.CarOptions();
+    opts.routeOptions.enableTolls = false;
+    _routingEngine.calculateCarRoute([start, end], opts, (here.RoutingError? err, List<here.Route>? routes) {
+      if (err != null || routes == null || routes.isEmpty) { comp.complete(null); return; }
+      comp.complete(routes.first);
     });
+    final route = await comp.future;
+    if (route != null && _hereMapController != null) {
+      _route = route;
+      _clearPolylines();
+      int totalMeters = 0;
+      int totalSeconds = 0;
+      for (final s in route.sections) {
+        _showSectionGeo(s.geometry, Colors.blue);
+        totalMeters += s.lengthInMeters;
+        totalSeconds += s.duration.inSeconds;
+      }
+      _totalMeters = totalMeters;
+      _totalDuration = Duration(seconds: totalSeconds);
+      _maneuverTexts = [];
+      for (final s in route.sections) for (final m in s.maneuvers) _maneuverTexts.add('${m.text} · ${m.lengthInMeters} m');
+      if (_maneuverTexts.isNotEmpty) _currentManeuver = _maneuverTexts.first;
+      try {
+        final verts = route.sections.first.geometry.vertices;
+        final firstVertex = verts.first;
+        final nextVertex = verts.length > 1 ? verts[1] : firstVertex;
+        final heading = _bearingBetween(firstVertex, nextVertex);
+        _hereMapController!.camera.lookAtPointWithMeasure(firstVertex, MapMeasure(MapMeasureKind.distanceInMeters, 80));
+        _hereMapController!.camera.setOrientationAtTarget(GeoOrientationUpdate(heading, 70.0));
+        // place user arrow at the actual start point used for this reroute (may be current location)
+        _addOrMoveUserMarker(startCoord, heading: heading);
+      } catch (_) {}
+      setState(() {});
+    }
   }
+  void _onPickupPressed() async {
+    setState(() { _pickedUp = true; });
+    // If user pressed early, reroute from the arrow's current position; otherwise use pickup coord
+    final startCoord = _currentCoords ?? widget.pickupCoords;
+    // place arrow where we consider 'now' (the point from which we'll route)
+    _addOrMoveUserMarker(startCoord, heading: 0);
+    // remove pickup marker since item is picked
+    try { if (_pickupMarker != null) { _hereMapController?.mapScene.removeMapMarker(_pickupMarker!); _pickupMarker = null; } } catch (_) {}
+    await _routeFromPickupToDrop(startCoord);
+  }
+
+  void _onDeliverPressed() {
+    final distance = _totalMeters ?? 0;
+    final duration = _totalDuration ?? Duration.zero;
+    final customer = widget.customerName;
+    // Clear overlays and markers but don't pop; _endTrip will clear map overlays when popToRoot=false
+    _endTrip(popToRoot: false);
+    // Navigate to a summary screen replacing this one
+    if (mounted) {
+      Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => DeliveryCompleteScreen(customerName: customer, distanceMeters: distance, duration: duration)));
+    }
+  }
+
+  String _formatLength(int meters) {
+    if (meters < 1000) return '$meters m';
+    final km = meters / 1000.0;
+    return '${km.toStringAsFixed(1)} km';
+  }
+
+  String _formatDuration(Duration d) {
+    final h = d.inHours;
+    final m = d.inMinutes % 60;
+    if (h > 0) return '${h}h ${m}m';
+    return '${m} min';
+  }
+
+  double _bearingBetween(GeoCoordinates a, GeoCoordinates b) {
+    final lat1 = _toRadians(a.latitude);
+    final lat2 = _toRadians(b.latitude);
+    final dLon = _toRadians(b.longitude - a.longitude);
+    final y = math.sin(dLon) * math.cos(lat2);
+    final x = math.cos(lat1) * math.sin(lat2) - math.sin(lat1) * math.cos(lat2) * math.cos(dLon);
+    final brng = math.atan2(y, x);
+    final deg = brng * 180.0 / math.pi;
+    return (deg + 360.0) % 360.0;
+  }
+
+  double _toRadians(double deg) => deg * (math.pi / 180.0);
+
+  String _nextInstructionText() {
+    if (_maneuverTexts.length > 1) return _maneuverTexts[1];
+    return 'Awaiting next maneuver';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Stack(
+        children: [
+          Positioned.fill(child: HereMap(onMapCreated: _onMapCreated)),
+
+          Positioned(
+            top: 20,
+            left: 12,
+            right: 12,
+            child: Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(16),
+                boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 10, offset: Offset(0, 4))],
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  Container(
+                    height: 56,
+                    width: 56,
+                    decoration: BoxDecoration(color: Colors.orange, borderRadius: BorderRadius.circular(16)),
+                    child: const Icon(Icons.navigation_rounded, color: Colors.white, size: 32),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          _currentManeuver.isNotEmpty ? _currentManeuver : 'Calculating route...',
+                          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: Colors.black),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          'Next: ${_nextInstructionText()}',
+                          style: TextStyle(fontSize: 14, color: Colors.grey[700], fontWeight: FontWeight.w500),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        const SizedBox(height: 6),
+                        Row(
+                          children: [
+                            Text(
+                              _totalDuration != null ? _formatDuration(_totalDuration!) : 'ETA',
+                              style: TextStyle(fontSize: 14, color: Colors.grey[800], fontWeight: FontWeight.w700),
+                            ),
+                            const SizedBox(width: 10),
+                            if (_totalMeters != null)
+                              Text(
+                                _formatLength(_totalMeters!),
+                                style: TextStyle(fontSize: 14, color: Colors.grey[800], fontWeight: FontWeight.w700),
+                              ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox.shrink(),
+                ],
+              ),
+            ),
+          ),
+
+          Positioned(
+            left: 12,
+            right: 12,
+            bottom: 20,
+            child: Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12), boxShadow: const [BoxShadow(color: Colors.black12, blurRadius: 6)]),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(widget.customerName.isNotEmpty ? 'Picking up (${widget.customerName})' : 'Picking up (unknown)', style: const TextStyle(fontWeight: FontWeight.w700)),
+                        const SizedBox(height: 4),
+                        Text(_pickedUp ? 'En route to delivery' : 'Pickup'),
+                      ],
+                    ),
+                  ),
+                  if (!_pickedUp)
+                    ElevatedButton(
+                      onPressed: _onPickupPressed,
+                      style: ElevatedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12)),
+                      child: const Text('Pickup'),
+                    )
+                  else
+                    ElevatedButton(
+                      onPressed: _onDeliverPressed,
+                      style: ElevatedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12)),
+                      child: const Text('Deliver'),
+                    ),
+                ],
+              ),
+            ),
+          ),
+
+          Positioned(
+            right: 16,
+            top: 140,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(color: Colors.black.withOpacity(0.8), borderRadius: BorderRadius.circular(12)),
+              child: Text(
+                _currentSpeedKph != null ? '${_currentSpeedKph!.toStringAsFixed(0)} km/h' : 'Speed N/A',
+                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+              ),
+            ),
+          ),
+
+          Positioned(
+            right: 16,
+            bottom: 120,
+            child: FloatingActionButton(
+              mini: true,
+              backgroundColor: Colors.white,
+              foregroundColor: Colors.black,
+              onPressed: _recenterCamera,
+              child: const Icon(Icons.my_location),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class DeliveryCompleteScreen extends StatelessWidget {
+  final String customerName;
+  final int distanceMeters;
+  final Duration duration;
+
+  const DeliveryCompleteScreen({Key? key, required this.customerName, required this.distanceMeters, required this.duration}) : super(key: key);
 
   String _formatLength(int meters) {
     if (meters < 1000) return '$meters m';
@@ -241,91 +496,23 @@ class _DeliveryNextScreenState extends State<DeliveryNextScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: Stack(
-        children: [
-          // Full-screen map
-          Positioned.fill(child: HereMap(onMapCreated: _onMapCreated)),
-
-          // Turn-by-turn overlay at top (light card) - compact pill style
-          Positioned(
-            top: 20,
-            left: 12,
-            right: 12,
-            child: SizedBox(
-              height: 88,
-              child: Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 6)]),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10), decoration: BoxDecoration(color: Colors.orange, borderRadius: BorderRadius.circular(24)), child: ConstrainedBox(constraints: BoxConstraints(maxWidth: 260), child: Text(_currentManeuver.isNotEmpty ? _currentManeuver : 'Calculating route...', style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold), overflow: TextOverflow.ellipsis))),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: SizedBox(
-                            height: 38,
-                            child: ListView.builder(
-                              scrollDirection: Axis.horizontal,
-                              itemCount: _maneuverTexts.length,
-                              itemBuilder: (context, i) {
-                                if (i == _nextManeuverIndex) return const SizedBox.shrink();
-                                return Padding(
-                                  padding: const EdgeInsets.only(right: 8.0),
-                                  child: Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8), decoration: BoxDecoration(color: Colors.grey[200], borderRadius: BorderRadius.circular(20)), child: Text(_maneuverTexts[i], style: const TextStyle(color: Colors.black87), overflow: TextOverflow.ellipsis)),
-                                );
-                              },
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6), decoration: BoxDecoration(color: Colors.grey[200], borderRadius: BorderRadius.circular(20)), child: Text(_totalDuration != null ? _formatDuration(_totalDuration!) : 'ETA', style: TextStyle(color: Colors.black87))),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-            ),
+      appBar: AppBar(title: const Text('Delivery complete')),
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24.0),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text('Customer: $customerName', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 12),
+              Text('Distance: ${_formatLength(distanceMeters)}'),
+              const SizedBox(height: 6),
+              Text('Duration: ${_formatDuration(duration)}'),
+              const SizedBox(height: 18),
+              ElevatedButton(onPressed: () => Navigator.of(context).popUntil((r) => r.isFirst), child: const Text('Done')),
+            ],
           ),
-
-          // Bottom status bar / trip card (light)
-          Positioned(
-            left: 12,
-            right: 12,
-            bottom: 20,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if (_totalDuration != null && _totalMeters != null)
-                  Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12), boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 6)]),
-                    child: Row(
-                      children: [
-                        Icon(Icons.directions_car, color: Colors.grey[800]),
-                        const SizedBox(width: 12),
-                        Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(_formatLength(_totalMeters!), style: TextStyle(color: Colors.grey[700])), Text(_formatDuration(_totalDuration!), style: const TextStyle(fontWeight: FontWeight.bold))]),
-                        const Spacer(),
-                        // small control icons
-                        CircleAvatar(radius: 18, backgroundColor: Colors.grey[200], child: IconButton(icon: Icon(Icons.pause, color: Colors.grey[800]), onPressed: () {})),
-                        const SizedBox(width: 8),
-                        // End Trip Button
-                        ElevatedButton(
-                          onPressed: _endTrip,
-                          style: ElevatedButton.styleFrom(backgroundColor: Colors.red, padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8)),
-                          child: const Text('End Trip', style: TextStyle(color: Colors.white)),
-                        ),
-                        const SizedBox(width: 8),
-                        CircleAvatar(radius: 18, backgroundColor: Colors.grey[200], child: IconButton(icon: Icon(Icons.menu, color: Colors.grey[800]), onPressed: () {})),
-
-                      ],
-                    ),
-                  ),
-              ],
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }

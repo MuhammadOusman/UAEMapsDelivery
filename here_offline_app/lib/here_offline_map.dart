@@ -98,6 +98,46 @@ class _HereOfflineMapScreenState extends State<HereOfflineMapScreen> {
     setState(() { _status = 'Prefetch complete'; _progress = 1.0; _prefetching = false; });
   }
 
+  // Prefetch a Karachi bounding box to populate online tiles (useful when testing in Pakistan)
+  Future<void> _prefetchKarachi() async {
+    if (_prefetching) return;
+    _prefetching = true;
+    _showStatus('Prefetching Karachi map cache...');
+    setState(() { _progress = 0.0; });
+
+    // Karachi bounding box (approx)
+    final double south = 24.70;
+    final double north = 25.05;
+    final double west = 66.70;
+    final double east = 67.30;
+
+    const int rows = 8;
+    const int cols = 8;
+    int total = rows * cols;
+    int done = 0;
+
+    // Use a camera distance that corresponds to a detailed neighborhood zoom
+    const double distanceToEarthInMeters = 2000;
+    MapMeasure mapMeasureZoom = MapMeasure(MapMeasureKind.distanceInMeters, distanceToEarthInMeters);
+
+    for (int r = 0; r < rows; r++) {
+      for (int c = 0; c < cols; c++) {
+        final lat = south + (north - south) * (r + 0.5) / rows;
+        final lon = west + (east - west) * (c + 0.5) / cols;
+        _hereMapController?.camera.lookAtPointWithMeasure(GeoCoordinates(lat, lon), mapMeasureZoom);
+        // Wait for the map engine to request tiles
+        await Future.delayed(const Duration(milliseconds: 400));
+        done++;
+        if (!mounted) return;
+        setState(() { _progress = done / total; _status = 'Prefetching Karachi... (${done}/$total)'; });
+      }
+    }
+
+    // Mark complete
+    if (!mounted) return;
+    setState(() { _status = 'Prefetch Karachi complete'; _progress = 1.0; _prefetching = false; });
+  }
+
   @override
   void dispose() {
     super.dispose();
@@ -134,6 +174,12 @@ class _HereOfflineMapScreenState extends State<HereOfflineMapScreen> {
                     icon: const Icon(Icons.download),
                     label: const Text('Prefetch UAE (cache)'),
                   ),
+                  const SizedBox(width: 8),
+                  ElevatedButton.icon(
+                    onPressed: _prefetching ? null : _prefetchKarachi,
+                    icon: const Icon(Icons.download_outlined),
+                    label: const Text('Prefetch Karachi'),
+                  ),
                   const SizedBox(width: 12),
                   ElevatedButton.icon(
                     onPressed: () {
@@ -144,6 +190,17 @@ class _HereOfflineMapScreenState extends State<HereOfflineMapScreen> {
                     },
                     icon: const Icon(Icons.my_location),
                     label: const Text('Center Dubai'),
+                  ),
+                  const SizedBox(width: 8),
+                  ElevatedButton.icon(
+                    onPressed: () {
+                      // Center on Karachi
+                      const double distanceToEarthInMeters = 8000;
+                      MapMeasure mapMeasureZoom = MapMeasure(MapMeasureKind.distanceInMeters, distanceToEarthInMeters);
+                      _hereMapController?.camera.lookAtPointWithMeasure(GeoCoordinates(24.8607, 67.0011), mapMeasureZoom);
+                    },
+                    icon: const Icon(Icons.location_city),
+                    label: const Text('Center Karachi'),
                   ),
                 ]),
 

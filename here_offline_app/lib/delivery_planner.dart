@@ -475,7 +475,6 @@ class _DeliveryPlannerScreenState extends State<DeliveryPlannerScreen> {
 
   // Calculate route between two coordinates and return the route (async)
   Future<here.Route?> _calculateRouteBetween(GeoCoordinates start, GeoCoordinates end) async {
-    if (_routingEngine == null) return null;
     final startWp = here.Waypoint.withDefaults(start);
     final endWp = here.Waypoint.withDefaults(end);
     final waypoints = [startWp, endWp];
@@ -556,13 +555,11 @@ class _DeliveryPlannerScreenState extends State<DeliveryPlannerScreen> {
       // check arrival
       final arrivalPlace = _currentRoute!.sections.last.arrivalPlace;
       final destinationCoords = _dropCoords ?? arrivalPlace.originalCoordinates ?? arrivalPlace.mapMatchedCoordinates;
-      if (destinationCoords != null) {
-        final distToDest = destinationCoords.distanceTo(coords);
-        if (distToDest < 25) {
-          // auto complete
-          _stopTrip(arrived: true);
-          return;
-        }
+      final distToDest = destinationCoords.distanceTo(coords);
+      if (distToDest < 25) {
+        // auto complete
+        _stopTrip(arrived: true);
+        return;
       }
 
       // check deviation (simple nearest vertex distance)

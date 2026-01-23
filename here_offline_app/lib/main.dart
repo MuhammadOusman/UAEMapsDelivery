@@ -53,9 +53,6 @@ class HereSplash extends StatefulWidget {
 }
 
 class _HereSplashState extends State<HereSplash> {
-  bool _checking = true;
-  bool _firstRun = false;
-
   @override
   void initState() {
     super.initState();
@@ -64,11 +61,7 @@ class _HereSplashState extends State<HereSplash> {
 
   Future<void> _checkFirstRun() async {
     final prefs = await SharedPreferences.getInstance();
-    final seen = prefs.getBool('map_prefetched') ?? false;
-    setState(() {
-      _firstRun = !seen;
-      _checking = false;
-    });
+    final _ = prefs.getBool('map_prefetched') ?? false;
 
     // Wait a short moment so user sees the splash then go to map
     await Future.delayed(const Duration(milliseconds: 300));
