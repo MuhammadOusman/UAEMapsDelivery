@@ -218,7 +218,7 @@ class _DeliveryStrictScreenState extends State<DeliveryStrictScreen> {
     setState(() { _suggestLoading = true; _focusedField = field; });
     _debounce = Timer(const Duration(milliseconds: 300), () {
       final biasCenter = _userCoords ?? _karachiCenter;
-      final tq = TextQuery.withArea(query, TextQueryArea.withCenter(biasCenter));
+      final tq = TextQuery.withArea(query, TextQueryArea.withCountries([CountryCode.are], biasCenter));
       _searchEngine.suggestExtended(tq, SearchOptions(), (SearchError? err, List<Suggestion>? s, ResponseDetails? r) {
         setState(() { _suggestLoading = false; _suggestions = s ?? []; });
       });

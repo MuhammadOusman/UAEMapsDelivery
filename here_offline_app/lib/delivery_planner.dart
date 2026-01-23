@@ -130,7 +130,7 @@ class _DeliveryPlannerScreenState extends State<DeliveryPlannerScreen> {
     }
     _suggestLoading = true;
     _suggestDebounce = Timer(const Duration(milliseconds: 300), () {
-      final textQuery = TextQuery.withArea(query, TextQueryArea.withCenter(GeoCoordinates(25.2048, 55.2708)));
+      final textQuery = TextQuery.withArea(query, TextQueryArea.withCountries([CountryCode.are], GeoCoordinates(25.2048, 55.2708)));
       final options = SearchOptions();
       _searchEngine.suggestExtended(textQuery, options, (SearchError? error, List<Suggestion>? suggestions, ResponseDetails? r) {
         setState(() {
