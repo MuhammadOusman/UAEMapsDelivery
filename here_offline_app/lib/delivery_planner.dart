@@ -10,6 +10,7 @@ import 'package:here_sdk/mapview.dart';
 import 'package:here_sdk/search.dart';
 import 'package:here_sdk/routing.dart' as here;
 import 'package:geolocator/geolocator.dart';
+import 'package:here_offline_app/app_theme.dart';
 
 // Trip lifecycle states (simplified)
 enum TripStatus { idle, onboard, completed }
@@ -99,9 +100,28 @@ class _DeliveryPlannerScreenState extends State<DeliveryPlannerScreen> {
     MapMeasure mapMeasureZoom = MapMeasure(MapMeasureKind.distanceInMeters, distanceToEarthInMeters);
     controller.camera.lookAtPointWithMeasure(GeoCoordinates(25.2048, 55.2708), mapMeasureZoom);
 
-    controller.mapScene.loadSceneForMapScheme(MapScheme.normalDay, (MapError? error) {
+    final scheme = Theme.of(context).brightness == Brightness.dark ? MapScheme.normalNight : MapScheme.normalDay;
+    controller.mapScene.loadSceneForMapScheme(scheme, (MapError? error) {
       if (error != null) {
         print('MapScene load failed: $error');
+      }
+    });
+
+    // reload scene when theme changes
+    final themeListener = () {
+      final useDark = AppTheme.mode.value == ThemeMode.dark || (AppTheme.mode.value == ThemeMode.system && Theme.of(context).brightness == Brightness.dark);
+      final newScheme = useDark ? MapScheme.normalNight : MapScheme.normalDay;
+      try { controller.mapScene.loadSceneForMapScheme(newScheme, (MapError? err) {}); } catch (_) {}
+    };
+    AppTheme.mode.addListener(themeListener);
+    // remove listener when disposing
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        () async {
+          // ensure removal when leaving
+          await Future<void>.delayed(Duration.zero);
+          try { AppTheme.mode.removeListener(themeListener); } catch (_) {}
+        }();
       }
     });
   }

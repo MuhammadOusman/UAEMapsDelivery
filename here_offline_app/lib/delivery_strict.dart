@@ -8,7 +8,7 @@ import 'package:here_sdk/search.dart';
 import 'package:here_sdk/routing.dart' as here;
 import 'delivery_next.dart';
 import 'package:geolocator/geolocator.dart';
-import 'dart:async';
+import 'package:here_offline_app/app_theme.dart';
 
 class DeliveryStrictScreen extends StatefulWidget {
   const DeliveryStrictScreen({Key? key}) : super(key: key);
@@ -19,6 +19,7 @@ class DeliveryStrictScreen extends StatefulWidget {
 
 class _DeliveryStrictScreenState extends State<DeliveryStrictScreen> {
   HereMapController? _hereMapController;
+  VoidCallback? _themeListener;
   final TextEditingController _customerController = TextEditingController();
   final TextEditingController _pickupController = TextEditingController();
   final TextEditingController _dropController = TextEditingController();
@@ -82,7 +83,8 @@ class _DeliveryStrictScreenState extends State<DeliveryStrictScreen> {
 
   void _onMapCreated(HereMapController controller) {
     _hereMapController = controller;
-    controller.mapScene.loadSceneForMapScheme(MapScheme.normalDay, (MapError? error) {
+    final scheme = Theme.of(context).brightness == Brightness.dark ? MapScheme.normalNight : MapScheme.normalDay;
+    controller.mapScene.loadSceneForMapScheme(scheme, (MapError? error) {
       if (error != null) {
         debugPrint('Scene load failed: $error');
         return;
@@ -93,6 +95,14 @@ class _DeliveryStrictScreenState extends State<DeliveryStrictScreen> {
         _hereMapController?.camera.lookAtPoint(_userCoords!);
       }
     });
+
+    // reload scene when theme changes
+    _themeListener = () {
+      final useDark = AppTheme.mode.value == ThemeMode.dark || (AppTheme.mode.value == ThemeMode.system && Theme.of(context).brightness == Brightness.dark);
+      final newScheme = useDark ? MapScheme.normalNight : MapScheme.normalDay;
+      try { controller.mapScene.loadSceneForMapScheme(newScheme, (MapError? err) {}); } catch (_) {}
+    };
+    AppTheme.mode.addListener(_themeListener!);
   }
 
   Future<void> _initLocation() async {
@@ -428,6 +438,22 @@ class _DeliveryStrictScreenState extends State<DeliveryStrictScreen> {
               ],
             ),
 
+            // Theme toggle button
+            Positioned(
+              right: 16,
+              top: 36,
+              child: ValueListenableBuilder<ThemeMode>(
+                valueListenable: AppTheme.mode,
+                builder: (context, mode, _) {
+                  final isDark = mode == ThemeMode.dark || (mode == ThemeMode.system && Theme.of(context).brightness == Brightness.dark);
+                  return FloatingActionButton(mini: true, onPressed: () {
+                    final next = (mode == ThemeMode.dark) ? ThemeMode.light : ThemeMode.dark;
+                    AppTheme.setMode(next);
+                  }, child: Icon(isDark ? Icons.dark_mode : Icons.light_mode));
+                },
+              ),
+            ),
+
             // Bottom card combining trip info and Start button
             if (_totalMeters != null && _totalDuration != null)
               Positioned(
@@ -441,7 +467,7 @@ class _DeliveryStrictScreenState extends State<DeliveryStrictScreen> {
                     padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 12.0),
                     child: Row(
                       children: [
-                        Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(_formatLength(_totalMeters!), style: TextStyle(color: Colors.grey[700])), const SizedBox(height: 4), Text(_formatDuration(_totalDuration!), style: const TextStyle(fontWeight: FontWeight.bold))]),
+                        Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(_formatLength(_totalMeters!), style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withOpacity(0.7))), const SizedBox(height: 4), Text(_formatDuration(_totalDuration!), style: TextStyle(fontWeight: FontWeight.bold, color: Theme.of(context).colorScheme.onSurface))]),
                         const Spacer(),
                         ElevatedButton.icon(
                           onPressed: (_pickupCoords != null && _dropCoords != null)
@@ -451,6 +477,8 @@ class _DeliveryStrictScreenState extends State<DeliveryStrictScreen> {
                                     pickupCoords: _pickupCoords!,
                                     dropCoords: _dropCoords!,
                                     customerName: _customerController.text.isEmpty ? '<unknown>' : _customerController.text,
+                                    pickupAddress: _pickupController.text.isEmpty ? 'Pickup location' : _pickupController.text,
+                                    dropAddress: _dropController.text.isEmpty ? 'Drop-off location' : _dropController.text,
                                   )));
                                 }
                               : null,

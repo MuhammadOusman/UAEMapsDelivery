@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:here_sdk/core.dart';
 import 'package:here_sdk/mapview.dart';
+import 'package:here_offline_app/app_theme.dart';
 
 class HereOfflineMapScreen extends StatefulWidget {
   final bool prefetchOnStart;
@@ -42,7 +43,8 @@ class _HereOfflineMapScreenState extends State<HereOfflineMapScreen> {
     _hereMapController!.camera.lookAtPointWithMeasure(GeoCoordinates(25.2048, 55.2708), mapMeasureZoom);
 
     // Load scene
-    _hereMapController!.mapScene.loadSceneForMapScheme(MapScheme.normalDay, (MapError? error) {
+    final scheme = Theme.of(context).brightness == Brightness.dark ? MapScheme.normalNight : MapScheme.normalDay;
+    _hereMapController!.mapScene.loadSceneForMapScheme(scheme, (MapError? error) {
       if (error != null) {
         _showStatus('Map scene not loaded: ${error.toString()}');
         return;
@@ -52,6 +54,22 @@ class _HereOfflineMapScreenState extends State<HereOfflineMapScreen> {
       // If requested, perform the simple camera prefetch (legacy behavior)
       if (widget.prefetchOnStart) {
         _prefetchUAE();
+      }
+    });
+
+    // reload when user toggles theme
+    final themeListener = () {
+      final useDark = AppTheme.mode.value == ThemeMode.dark || (AppTheme.mode.value == ThemeMode.system && Theme.of(context).brightness == Brightness.dark);
+      final newScheme = useDark ? MapScheme.normalNight : MapScheme.normalDay;
+      try { _hereMapController?.mapScene.loadSceneForMapScheme(newScheme, (MapError? err) {}); } catch (_) {}
+    };
+    AppTheme.mode.addListener(themeListener);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        () async {
+          await Future<void>.delayed(Duration.zero);
+          try { AppTheme.mode.removeListener(themeListener); } catch (_) {}
+        }();
       }
     });
   }
@@ -151,7 +169,15 @@ class _HereOfflineMapScreenState extends State<HereOfflineMapScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('HERE Offline - UAE (Map)')),
+      appBar: AppBar(title: const Text('HERE Offline - UAE (Map)'), actions: [
+        ValueListenableBuilder<ThemeMode>(valueListenable: AppTheme.mode, builder: (context, mode, _) {
+          final isDark = mode == ThemeMode.dark || (mode == ThemeMode.system && Theme.of(context).brightness == Brightness.dark);
+          return IconButton(onPressed: () {
+            final next = (mode == ThemeMode.dark) ? ThemeMode.light : ThemeMode.dark;
+            AppTheme.setMode(next);
+          }, icon: Icon(isDark ? Icons.dark_mode : Icons.light_mode));
+        }),
+      ]),
       body: Column(
         children: [
           Expanded(

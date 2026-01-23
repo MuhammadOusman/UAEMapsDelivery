@@ -9,6 +9,7 @@ import 'package:here_sdk/routing.dart' as here;
 import 'package:geolocator/geolocator.dart';
 import 'dart:async' as async;
 import 'package:here_offline_app/delivery_complete.dart';
+import 'package:here_offline_app/app_theme.dart';
 
 // Live location disabled temporarily; using fixed Dubai test coordinate.
 class DeliveryNextScreen extends StatefulWidget {
@@ -16,8 +17,10 @@ class DeliveryNextScreen extends StatefulWidget {
   final GeoCoordinates pickupCoords;
   final GeoCoordinates dropCoords;
   final String customerName;
+  final String pickupAddress;
+  final String dropAddress;
 
-  const DeliveryNextScreen({Key? key, required this.userCoords, required this.pickupCoords, required this.dropCoords, required this.customerName}) : super(key: key);
+  const DeliveryNextScreen({Key? key, required this.userCoords, required this.pickupCoords, required this.dropCoords, required this.customerName, required this.pickupAddress, required this.dropAddress}) : super(key: key);
 
   @override
   State<DeliveryNextScreen> createState() => _DeliveryNextScreenState();
@@ -54,6 +57,8 @@ class _DeliveryNextScreenState extends State<DeliveryNextScreen> {
   // TEMP spoofed user location (Dubai) until live location is restored.
   final GeoCoordinates _dubaiTestCoords = GeoCoordinates(25.2048, 55.2708);
 
+  VoidCallback? _themeListener;
+
   @override
   void initState() {
     super.initState();
@@ -64,9 +69,16 @@ class _DeliveryNextScreenState extends State<DeliveryNextScreen> {
     }
   }
 
+  @override
+  void dispose() {
+    try { if (_themeListener != null) AppTheme.mode.removeListener(_themeListener!); } catch (_) {}
+    super.dispose();
+  }
+
   void _onMapCreated(HereMapController controller) {
     _hereMapController = controller;
-    controller.mapScene.loadSceneForMapScheme(MapScheme.normalDay, (MapError? e) {
+    final scheme = Theme.of(context).brightness == Brightness.dark ? MapScheme.normalNight : MapScheme.normalDay;
+    controller.mapScene.loadSceneForMapScheme(scheme, (MapError? e) {
       if (e != null) { debugPrint('Scene load failed: $e'); return; }
       _calculateAndShowRoute();
       // start location updates (live GPS)
@@ -80,6 +92,15 @@ class _DeliveryNextScreenState extends State<DeliveryNextScreen> {
         _hereMapController?.camera.setOrientationAtTarget(GeoOrientationUpdate(headingToPickup, 65.0));
       } catch (_) {}
     });
+
+    // reload scene when theme changes
+    _themeListener = () {
+      final useDark = AppTheme.mode.value == ThemeMode.dark || (AppTheme.mode.value == ThemeMode.system && Theme.of(context).brightness == Brightness.dark);
+      final newScheme = useDark ? MapScheme.normalNight : MapScheme.normalDay;
+      try { controller.mapScene.loadSceneForMapScheme(newScheme, (MapError? err) {}); } catch (_) {}
+    };
+    AppTheme.mode.addListener(_themeListener!);
+
   }
 
   Future<void> _calculateAndShowRoute() async {
@@ -456,7 +477,7 @@ class _DeliveryNextScreenState extends State<DeliveryNextScreen> {
             child: Container(
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
-                color: Colors.white,
+                color: Theme.of(context).colorScheme.surface,
                 borderRadius: BorderRadius.circular(16),
                 boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 10, offset: Offset(0, 4))],
               ),
@@ -477,14 +498,14 @@ class _DeliveryNextScreenState extends State<DeliveryNextScreen> {
                       children: [
                         Text(
                           _currentManeuver.isNotEmpty ? _currentManeuver : 'Calculating route...',
-                          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: Colors.black),
+                          style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: Theme.of(context).colorScheme.onSurface),
                           maxLines: 2,
                           overflow: TextOverflow.ellipsis,
                         ),
                         const SizedBox(height: 4),
                         Text(
                           'Next: ${_nextInstructionText()}',
-                          style: TextStyle(fontSize: 14, color: Colors.grey[700], fontWeight: FontWeight.w500),
+                          style: TextStyle(fontSize: 14, color: Theme.of(context).colorScheme.onSurface.withOpacity(0.7), fontWeight: FontWeight.w500),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                         ),
@@ -493,13 +514,13 @@ class _DeliveryNextScreenState extends State<DeliveryNextScreen> {
                           children: [
                             Text(
                               _totalDuration != null ? _formatDuration(_totalDuration!) : 'ETA',
-                              style: TextStyle(fontSize: 14, color: Colors.grey[800], fontWeight: FontWeight.w700),
+                              style: TextStyle(fontSize: 14, color: Theme.of(context).colorScheme.onSurface.withOpacity(0.8), fontWeight: FontWeight.w700),
                             ),
                             const SizedBox(width: 10),
                             if (_totalMeters != null)
                               Text(
                                 _formatLength(_totalMeters!),
-                                style: TextStyle(fontSize: 14, color: Colors.grey[800], fontWeight: FontWeight.w700),
+                                style: TextStyle(fontSize: 14, color: Theme.of(context).colorScheme.onSurface.withOpacity(0.8), fontWeight: FontWeight.w700),
                               ),
                           ],
                         ),
@@ -518,16 +539,16 @@ class _DeliveryNextScreenState extends State<DeliveryNextScreen> {
             bottom: 20,
             child: Container(
               padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12), boxShadow: const [BoxShadow(color: Colors.black12, blurRadius: 6)]),
+              decoration: BoxDecoration(color: Theme.of(context).colorScheme.surface, borderRadius: BorderRadius.circular(12), boxShadow: const [BoxShadow(color: Colors.black12, blurRadius: 6)]),
               child: Row(
                 children: [
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(widget.customerName.isNotEmpty ? 'Picking up (${widget.customerName})' : 'Picking up (unknown)', style: const TextStyle(fontWeight: FontWeight.w700)),
+                        Text(widget.customerName.isNotEmpty ? 'Picking up (${widget.customerName})' : 'Picking up (unknown)', style: TextStyle(fontWeight: FontWeight.w700, color: Theme.of(context).colorScheme.onSurface)),
                         const SizedBox(height: 4),
-                        Text(_pickedUp ? 'En route to delivery' : 'Pickup'),
+                        Text(_pickedUp ? 'En route to ${widget.dropAddress}' : widget.pickupAddress, style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withOpacity(0.7))),
                       ],
                     ),
                   ),
@@ -566,8 +587,6 @@ class _DeliveryNextScreenState extends State<DeliveryNextScreen> {
             bottom: 120,
             child: FloatingActionButton(
               mini: true,
-              backgroundColor: Colors.white,
-              foregroundColor: Colors.black,
               onPressed: _recenterCamera,
               child: const Icon(Icons.my_location),
             ),
