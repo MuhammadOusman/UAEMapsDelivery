@@ -11,6 +11,8 @@ dependencies:
   path_provider: ^2.1.5
   shared_preferences: ^2.0.15
   geolocator: ^9.0.2
+  riverpod: ^2.4.9
+  flutter_riverpod: ^2.4.9
 
   # Use the official HERE SDK package unpacked at workspace root
   here_sdk:

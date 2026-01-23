@@ -7,6 +7,7 @@ import 'delivery_strict.dart';
 // Credentials are loaded from `lib/secrets.dart` generated from `.env` (run `dart run tool/gen_secrets.dart`)
 import 'secrets.dart';
 import 'package:here_offline_app/app_theme.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 
 Future<void> main() async {
@@ -18,7 +19,7 @@ Future<void> main() async {
   // Load persisted theme preference
   await AppTheme.load();
 
-  runApp(const MyApp());
+  runApp(const ProviderScope(child: MyApp()));
 }
 
 /// Small helper for storing and notifying theme changes across the app.
@@ -38,22 +39,19 @@ Future<void> _initializeHERESDK() async {
   }
 }
 
-class MyApp extends StatelessWidget {
+class MyApp extends ConsumerWidget {
   const MyApp({super.key});
 
   @override
-  Widget build(BuildContext context) {
-    return ValueListenableBuilder<ThemeMode>(
-      valueListenable: AppTheme.mode,
-      builder: (context, mode, _) {
-        return MaterialApp(
-          title: 'HERE UAE Offline Demo',
-          theme: ThemeData(primarySwatch: Colors.blue, brightness: Brightness.light),
-          darkTheme: ThemeData(brightness: Brightness.dark, primarySwatch: Colors.blue),
-          themeMode: mode,
-          home: const HereSplash(),
-        );
-      },
+  Widget build(BuildContext context, WidgetRef ref) {
+    final themeMode = ref.watch(themeModeProvider);
+    return MaterialApp(
+      title: 'HERE UAE Offline Demo',
+      debugShowCheckedModeBanner: false,
+      theme: ThemeData(primarySwatch: Colors.blue, brightness: Brightness.light),
+      darkTheme: ThemeData(brightness: Brightness.dark, primarySwatch: Colors.blue),
+      themeMode: themeMode,
+      home: const HereSplash(),
     );
   }
 }

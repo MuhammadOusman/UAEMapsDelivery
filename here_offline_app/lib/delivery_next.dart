@@ -8,7 +8,6 @@ import 'package:here_sdk/mapview.dart';
 import 'package:here_sdk/routing.dart' as here;
 import 'package:geolocator/geolocator.dart';
 import 'dart:async' as async;
-import 'package:here_offline_app/delivery_complete.dart';
 import 'package:here_offline_app/app_theme.dart';
 
 // Live location disabled temporarily; using fixed Dubai test coordinate.

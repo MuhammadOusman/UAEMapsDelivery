@@ -9,6 +9,7 @@ import 'package:here_sdk/routing.dart' as here;
 import 'delivery_next.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:here_offline_app/app_theme.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 class DeliveryStrictScreen extends StatefulWidget {
   const DeliveryStrictScreen({Key? key}) : super(key: key);
@@ -35,7 +36,6 @@ class _DeliveryStrictScreenState extends State<DeliveryStrictScreen> {
 
   // Live location subscription
   StreamSubscription<Position>? _posSub;
-  Position? _lastPos;
 
   late SearchEngine _searchEngine;
   late here.RoutingEngine _routingEngine;
@@ -145,7 +145,6 @@ class _DeliveryStrictScreenState extends State<DeliveryStrictScreen> {
 
       // get current position and set user marker
       final pos = await Geolocator.getCurrentPosition(desiredAccuracy: LocationAccuracy.best);
-      _lastPos = pos;
       _userCoords = GeoCoordinates(pos.latitude, pos.longitude);
       if (_hereMapController != null) {
         _addUserMarker(_userCoords!);
@@ -155,7 +154,6 @@ class _DeliveryStrictScreenState extends State<DeliveryStrictScreen> {
       // subscribe to position updates
       final locationSettings = LocationSettings(accuracy: LocationAccuracy.best, distanceFilter: 5);
       _posSub = Geolocator.getPositionStream(locationSettings: locationSettings).listen((p) {
-        _lastPos = p;
         _userCoords = GeoCoordinates(p.latitude, p.longitude);
         if (_hereMapController != null) {
           // move marker
@@ -442,14 +440,18 @@ class _DeliveryStrictScreenState extends State<DeliveryStrictScreen> {
             Positioned(
               right: 16,
               top: 36,
-              child: ValueListenableBuilder<ThemeMode>(
-                valueListenable: AppTheme.mode,
-                builder: (context, mode, _) {
+              child: Consumer(
+                builder: (context, ref, _) {
+                  final mode = ref.watch(themeModeProvider);
                   final isDark = mode == ThemeMode.dark || (mode == ThemeMode.system && Theme.of(context).brightness == Brightness.dark);
-                  return FloatingActionButton(mini: true, onPressed: () {
-                    final next = (mode == ThemeMode.dark) ? ThemeMode.light : ThemeMode.dark;
-                    AppTheme.setMode(next);
-                  }, child: Icon(isDark ? Icons.dark_mode : Icons.light_mode));
+                  return FloatingActionButton(
+                    mini: true,
+                    onPressed: () {
+                      final next = (mode == ThemeMode.dark) ? ThemeMode.light : ThemeMode.dark;
+                      ref.read(themeModeProvider.notifier).setMode(next);
+                    },
+                    child: Icon(isDark ? Icons.dark_mode : Icons.light_mode),
+                  );
                 },
               ),
             ),
