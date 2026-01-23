@@ -7,6 +7,8 @@ import 'package:here_sdk/mapview.dart';
 import 'package:here_sdk/search.dart';
 import 'package:here_sdk/routing.dart' as here;
 import 'delivery_next.dart';
+import 'package:geolocator/geolocator.dart';
+import 'dart:async';
 
 class DeliveryStrictScreen extends StatefulWidget {
   const DeliveryStrictScreen({Key? key}) : super(key: key);
@@ -27,8 +29,12 @@ class _DeliveryStrictScreenState extends State<DeliveryStrictScreen> {
 
   // Karachi center to bias search when user location is elsewhere.
   final GeoCoordinates _karachiCenter = GeoCoordinates(24.8607, 67.0011);
-  // Temporary fixed user position in Dubai (requested override until restoration).
+  // Temporary fixed user position in Dubai (kept for tests) - not used when GPS enabled.
   final GeoCoordinates _dubaiTestCoords = GeoCoordinates(25.2048, 55.2708);
+
+  // Live location subscription
+  StreamSubscription<Position>? _posSub;
+  Position? _lastPos;
 
   late SearchEngine _searchEngine;
   late here.RoutingEngine _routingEngine;
@@ -70,6 +76,7 @@ class _DeliveryStrictScreenState extends State<DeliveryStrictScreen> {
     _customerController.dispose();
     _pickupController.dispose();
     _dropController.dispose();
+    try { _posSub?.cancel(); } catch (_) {}
     super.dispose();
   }
 
@@ -89,13 +96,73 @@ class _DeliveryStrictScreenState extends State<DeliveryStrictScreen> {
   }
 
   Future<void> _initLocation() async {
-    // TEMP override: fixed Dubai location; restore live Geolocator flow when requested.
-    _userCoords = _dubaiTestCoords;
-    if (_hereMapController != null) {
-      _addUserMarker(_userCoords!);
-      _centerToCoords(_userCoords!, 200);
+    // Try to start live GPS tracking; fall back to temporary test coordinate if not available.
+    try {
+      final serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) {
+        // fallback to test coords
+        _userCoords = _dubaiTestCoords;
+        if (_hereMapController != null) {
+          _addUserMarker(_userCoords!);
+          _centerToCoords(_userCoords!, 200);
+        }
+        setState(() {});
+        return;
+      }
+
+      LocationPermission permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+        if (permission == LocationPermission.denied) {
+          _userCoords = _dubaiTestCoords;
+          if (_hereMapController != null) {
+            _addUserMarker(_userCoords!);
+            _centerToCoords(_userCoords!, 200);
+          }
+          setState(() {});
+          return;
+        }
+      }
+      if (permission == LocationPermission.deniedForever) {
+        _userCoords = _dubaiTestCoords;
+        if (_hereMapController != null) {
+          _addUserMarker(_userCoords!);
+          _centerToCoords(_userCoords!, 200);
+        }
+        setState(() {});
+        return;
+      }
+
+      // get current position and set user marker
+      final pos = await Geolocator.getCurrentPosition(desiredAccuracy: LocationAccuracy.best);
+      _lastPos = pos;
+      _userCoords = GeoCoordinates(pos.latitude, pos.longitude);
+      if (_hereMapController != null) {
+        _addUserMarker(_userCoords!);
+        _centerToCoords(_userCoords!, 200);
+      }
+
+      // subscribe to position updates
+      final locationSettings = LocationSettings(accuracy: LocationAccuracy.best, distanceFilter: 5);
+      _posSub = Geolocator.getPositionStream(locationSettings: locationSettings).listen((p) {
+        _lastPos = p;
+        _userCoords = GeoCoordinates(p.latitude, p.longitude);
+        if (_hereMapController != null) {
+          // move marker
+          _addUserMarker(_userCoords!);
+        }
+        setState(() {});
+      });
+    } catch (e) {
+      debugPrint('Location init error: $e');
+      // fallback
+      _userCoords = _dubaiTestCoords;
+      if (_hereMapController != null) {
+        _addUserMarker(_userCoords!);
+        _centerToCoords(_userCoords!, 200);
+      }
+      setState(() {});
     }
-    setState(() {});
   }
 
   void _addUserMarker(GeoCoordinates coords) {

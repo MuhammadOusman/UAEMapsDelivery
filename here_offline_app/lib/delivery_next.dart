@@ -6,6 +6,9 @@ import 'package:flutter/material.dart';
 import 'package:here_sdk/core.dart';
 import 'package:here_sdk/mapview.dart';
 import 'package:here_sdk/routing.dart' as here;
+import 'package:geolocator/geolocator.dart';
+import 'dart:async' as async;
+import 'package:here_offline_app/delivery_complete.dart';
 
 // Live location disabled temporarily; using fixed Dubai test coordinate.
 class DeliveryNextScreen extends StatefulWidget {
@@ -33,6 +36,13 @@ class _DeliveryNextScreenState extends State<DeliveryNextScreen> {
   bool _pickedUp = false;
   GeoCoordinates? _currentCoords; // track current arrow position
 
+  // Live GPS
+  async.StreamSubscription<Position>? _posSub;
+  Position? _lastPosition;
+  DateTime? _tripStartTime;
+  DateTime? _tripEndTime;
+  double _distanceTravelled = 0.0;
+
   final List<MapPolyline> _polylines = [];
 
   List<String> _maneuverTexts = [];
@@ -59,19 +69,22 @@ class _DeliveryNextScreenState extends State<DeliveryNextScreen> {
     controller.mapScene.loadSceneForMapScheme(MapScheme.normalDay, (MapError? e) {
       if (e != null) { debugPrint('Scene load failed: $e'); return; }
       _calculateAndShowRoute();
-      _addOrMoveUserMarker(_dubaiTestCoords, heading: 0);
+      // start location updates (live GPS)
+      _startLocationUpdates();
       _addPickupDropMarkers();
       try {
-        // Orient the initial view toward the pickup location
-        final headingToPickup = _bearingBetween(_dubaiTestCoords, widget.pickupCoords);
-        _hereMapController?.camera.lookAtPointWithMeasure(_dubaiTestCoords, MapMeasure(MapMeasureKind.distanceInMeters, 20));
+        // Orient the initial view toward the pickup location (until GPS updates move it)
+        final initial = widget.userCoords;
+        final headingToPickup = _bearingBetween(initial, widget.pickupCoords);
+        _hereMapController?.camera.lookAtPointWithMeasure(initial, MapMeasure(MapMeasureKind.distanceInMeters, 40));
         _hereMapController?.camera.setOrientationAtTarget(GeoOrientationUpdate(headingToPickup, 65.0));
       } catch (_) {}
     });
   }
 
   Future<void> _calculateAndShowRoute() async {
-    final start = here.Waypoint.withDefaults(_dubaiTestCoords);
+    final startCoord = _getCurrentStartCoords();
+    final start = here.Waypoint.withDefaults(startCoord);
     final mid = here.Waypoint.withDefaults(widget.pickupCoords);
     final end = here.Waypoint.withDefaults(widget.dropCoords);
 
@@ -115,7 +128,8 @@ class _DeliveryNextScreenState extends State<DeliveryNextScreen> {
         final firstVertex = verts.first;
         final nextVertex = verts.length > 1 ? verts[1] : firstVertex;
         final heading = _bearingBetween(firstVertex, nextVertex);
-        _addOrMoveUserMarker(_dubaiTestCoords, heading: heading);
+        final startMarkerCoords = _getCurrentStartCoords();
+        _addOrMoveUserMarker(startMarkerCoords, heading: heading);
         _hereMapController!.camera.lookAtPointWithMeasure(firstVertex, MapMeasure(MapMeasureKind.distanceInMeters, 80));
         _hereMapController!.camera.setOrientationAtTarget(GeoOrientationUpdate(heading, 70.0));
       } catch (_) {}
@@ -191,12 +205,13 @@ class _DeliveryNextScreenState extends State<DeliveryNextScreen> {
         final heading = _bearingBetween(firstVertex, nextVertex);
         _hereMapController!.camera.lookAtPointWithMeasure(firstVertex, MapMeasure(MapMeasureKind.distanceInMeters, 80));
         _hereMapController!.camera.setOrientationAtTarget(GeoOrientationUpdate(heading, 70.0));
-        _addOrMoveUserMarker(_pickedUp ? widget.pickupCoords : _dubaiTestCoords, heading: heading);
+        _addOrMoveUserMarker(_pickedUp ? widget.pickupCoords : _getCurrentStartCoords(), heading: heading);
         return;
       }
-      _hereMapController!.camera.lookAtPointWithMeasure(_dubaiTestCoords, MapMeasure(MapMeasureKind.distanceInMeters, 80));
+      final startFallback = _getCurrentStartCoords();
+      _hereMapController!.camera.lookAtPointWithMeasure(startFallback, MapMeasure(MapMeasureKind.distanceInMeters, 80));
       _hereMapController!.camera.setOrientationAtTarget(GeoOrientationUpdate(0.0, 70.0));
-      _addOrMoveUserMarker(_dubaiTestCoords, heading: 0);
+      _addOrMoveUserMarker(startFallback, heading: 0);
     } catch (_) {}
   }
 
@@ -239,6 +254,8 @@ class _DeliveryNextScreenState extends State<DeliveryNextScreen> {
       try { _hereMapController?.mapScene.removeMapPolyline(p); } catch (_) {}
     }
     _polylines.clear();
+    // stop GPS tracking
+    _stopLocationUpdates();
     if (popToRoot && mounted) Navigator.of(context).popUntil((r) => r.isFirst);
   }
 
@@ -291,20 +308,11 @@ class _DeliveryNextScreenState extends State<DeliveryNextScreen> {
     _addOrMoveUserMarker(startCoord, heading: 0);
     // remove pickup marker since item is picked
     try { if (_pickupMarker != null) { _hereMapController?.mapScene.removeMapMarker(_pickupMarker!); _pickupMarker = null; } } catch (_) {}
+    // start trip timer if not started
+    _tripStartTime ??= DateTime.now();
     await _routeFromPickupToDrop(startCoord);
   }
 
-  void _onDeliverPressed() {
-    final distance = _totalMeters ?? 0;
-    final duration = _totalDuration ?? Duration.zero;
-    final customer = widget.customerName;
-    // Clear overlays and markers but don't pop; _endTrip will clear map overlays when popToRoot=false
-    _endTrip(popToRoot: false);
-    // Navigate to a summary screen replacing this one
-    if (mounted) {
-      Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => DeliveryCompleteScreen(customerName: customer, distanceMeters: distance, duration: duration)));
-    }
-  }
 
   String _formatLength(int meters) {
     if (meters < 1000) return '$meters m';
@@ -332,9 +340,106 @@ class _DeliveryNextScreenState extends State<DeliveryNextScreen> {
 
   double _toRadians(double deg) => deg * (math.pi / 180.0);
 
+  GeoCoordinates _getCurrentStartCoords() {
+    // prefer last known GPS arrow coords, then initial supplied userCoords, else fallback test coords
+    return _currentCoords ?? widget.userCoords ?? _dubaiTestCoords;
+  }
+
+  // --- Delivery completion ---
+  void _onDeliverPressed() async {
+    // stop tracking
+    _stopLocationUpdates();
+    _tripEndTime ??= DateTime.now();
+    final duration = _tripEndTime!.difference(_tripStartTime ?? _tripEndTime!);
+    final distance = _distanceTravelled.round();
+    // cleanup map
+    _endTrip(popToRoot: false);
+    // show summary screen
+    Navigator.of(context).push(MaterialPageRoute(builder: (_) => DeliveryCompleteScreen(customerName: widget.customerName, duration: duration, distanceMeters: distance))).then((_) {
+      // after summary, go back to root
+      if (mounted) Navigator.of(context).popUntil((r) => r.isFirst);
+    });
+  }
+
   String _nextInstructionText() {
     if (_maneuverTexts.length > 1) return _maneuverTexts[1];
     return 'Awaiting next maneuver';
+  }
+
+  // --- Live GPS tracking helpers ---
+  Future<void> _startLocationUpdates() async {
+    try {
+      final serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Location services are disabled.')));
+        return;
+      }
+      var permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+        if (permission == LocationPermission.denied) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Location permission denied.')));
+          return;
+        }
+      }
+      if (permission == LocationPermission.deniedForever) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Location permissions are permanently denied.')));
+        return;
+      }
+
+      // get an immediate current position so speed/arrow show up quickly
+      try {
+        final pos = await Geolocator.getCurrentPosition(desiredAccuracy: LocationAccuracy.best);
+        _lastPosition = pos;
+        _currentSpeedKph = (pos.speed.isNaN ? 0.0 : pos.speed) * 3.6;
+        _currentCoords = GeoCoordinates(pos.latitude, pos.longitude);
+        if (_hereMapController != null) {
+          _addOrMoveUserMarker(_currentCoords!, heading: pos.heading);
+          _hereMapController!.camera.lookAtPointWithMeasure(_currentCoords!, MapMeasure(MapMeasureKind.distanceInMeters, 40));
+        }
+      } catch (e) { debugPrint('Initial getCurrentPosition failed: $e'); }
+
+      final locationSettings = LocationSettings(accuracy: LocationAccuracy.best, distanceFilter: 3);
+      _posSub = Geolocator.getPositionStream(locationSettings: locationSettings).listen((pos) {
+        _onPosition(pos);
+      });
+    } catch (e) {
+      debugPrint('Location start failed: $e');
+    }
+  }
+
+  void _stopLocationUpdates() {
+    try {
+      _posSub?.cancel();
+      _posSub = null;
+      _lastPosition = null;
+      _tripEndTime = DateTime.now();
+    } catch (_) {}
+  }
+
+  void _onPosition(Position pos) {
+    // update speed
+    setState(() {
+      _currentSpeedKph = (pos.speed.isNaN ? 0.0 : pos.speed) * 3.6;
+    });
+
+    // compute distance from last
+    if (_lastPosition != null) {
+      final delta = Geolocator.distanceBetween(_lastPosition!.latitude, _lastPosition!.longitude, pos.latitude, pos.longitude);
+      _distanceTravelled += delta;
+    }
+    _lastPosition = pos;
+
+    // update arrow position and heading
+    final coords = GeoCoordinates(pos.latitude, pos.longitude);
+    double heading = pos.heading;
+    if (heading.isNaN || heading == 0.0) {
+      if (_currentCoords != null) heading = _bearingBetween(_currentCoords!, coords);
+    }
+    _addOrMoveUserMarker(coords, heading: heading);
+
+    // if trip not started yet, set start
+    _tripStartTime ??= DateTime.now();
   }
 
   @override
@@ -435,7 +540,7 @@ class _DeliveryNextScreenState extends State<DeliveryNextScreen> {
                   else
                     ElevatedButton(
                       onPressed: _onDeliverPressed,
-                      style: ElevatedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12)),
+                      style: ElevatedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12), backgroundColor: Colors.green),
                       child: const Text('Deliver'),
                     ),
                 ],
@@ -450,7 +555,7 @@ class _DeliveryNextScreenState extends State<DeliveryNextScreen> {
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
               decoration: BoxDecoration(color: Colors.black.withOpacity(0.8), borderRadius: BorderRadius.circular(12)),
               child: Text(
-                _currentSpeedKph != null ? '${_currentSpeedKph!.toStringAsFixed(0)} km/h' : 'Speed N/A',
+                _currentSpeedKph != null ? '${_currentSpeedKph!.toStringAsFixed(0)} km/h' : '0 km/h',
                 style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
               ),
             ),
